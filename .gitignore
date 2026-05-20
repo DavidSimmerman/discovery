@@ -24,3 +24,10 @@ vite.config.ts.timestamp-*
 
 # Local brainstorming artifacts
 .superpowers/
+
+# Docker
+docker-compose.override.yml
+
+# Playwright
+playwright-report/
+test-results/

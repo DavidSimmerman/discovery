@@ -1,0 +1,7 @@
+@import 'tailwindcss';
+
+@theme {
+  --color-spotify-green: #1DB954;
+}
+
+html, body { background: #000; color: #fff; font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Helvetica Neue", sans-serif; }

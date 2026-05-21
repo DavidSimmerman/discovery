@@ -1,4 +1,5 @@
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import { env } from '$env/dynamic/private';
 
 const ALGO = 'aes-256-gcm';
 const NONCE_LEN = 12;
@@ -29,7 +30,7 @@ export function decryptToken(blob: Buffer, key: Buffer): string {
 }
 
 export function loadKey(): Buffer {
-	const hex = process.env.TOKEN_ENC_KEY;
+	const hex = env.TOKEN_ENC_KEY;
 	if (!hex) throw new Error('TOKEN_ENC_KEY env var missing');
 	const buf = Buffer.from(hex, 'hex');
 	if (buf.length !== 32) throw new Error('TOKEN_ENC_KEY must be 32 bytes (64 hex chars)');

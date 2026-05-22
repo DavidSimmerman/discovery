@@ -2,7 +2,7 @@ import { db } from '$lib/server/db';
 import { tracks } from '$lib/server/db/schema';
 import type { SpotifyTrack } from '$lib/server/spotify';
 
-function largestAlbumArtUrl(track: SpotifyTrack): string | null {
+export function largestAlbumArtUrl(track: SpotifyTrack): string | null {
   const images = track.album?.images ?? [];
   if (images.length === 0) return null;
   return images.reduce((largest, img) => (img.width > largest.width ? img : largest)).url;

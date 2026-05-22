@@ -9,9 +9,11 @@ const SAFETY_MS = 60_000; // refresh 1 min before expiry
 // Per-process single-flight: keeps overlapping refreshes for the same user from
 // stampeding Spotify. Fine for a single-instance deploy; would need a shared lock
 // (e.g. Postgres advisory lock) to be correct across multiple instances.
-const inFlight = new Map<string, Promise<string>>();
+type TokenResult = { access_token: string; expires_at: Date };
 
-export async function getValidAccessToken(userId: string): Promise<string> {
+const inFlight = new Map<string, Promise<TokenResult>>();
+
+export async function getValidAccessToken(userId: string): Promise<TokenResult> {
 	const row = await db.select().from(spotifyTokens)
 		.where(eq(spotifyTokens.userId, userId)).limit(1);
 	if (!row[0]) throw new Error('no spotify token for user');
@@ -19,8 +21,8 @@ export async function getValidAccessToken(userId: string): Promise<string> {
 	const now = Date.now();
 	const expiresAt = row[0].expiresAt?.getTime() ?? 0;
 
-	if (row[0].accessToken && expiresAt - now > SAFETY_MS) {
-		return row[0].accessToken;
+	if (row[0].accessToken && row[0].expiresAt && expiresAt - now > SAFETY_MS) {
+		return { access_token: row[0].accessToken, expires_at: row[0].expiresAt };
 	}
 
 	const existing = inFlight.get(userId);
@@ -31,7 +33,7 @@ export async function getValidAccessToken(userId: string): Promise<string> {
 
 	const promise = (async () => {
 		const fresh = await refreshAccessToken(refreshToken);
-		const newExpiresAt = new Date(now + fresh.expires_in * 1000);
+		const newExpiresAt = new Date(Date.now() + fresh.expires_in * 1000);
 		const newEnc = encryptToken(fresh.refresh_token, key);
 
 		await db.update(spotifyTokens)
@@ -43,7 +45,7 @@ export async function getValidAccessToken(userId: string): Promise<string> {
 			})
 			.where(eq(spotifyTokens.userId, userId));
 
-		return fresh.access_token;
+		return { access_token: fresh.access_token, expires_at: newExpiresAt };
 	})().finally(() => {
 		inFlight.delete(userId);
 	});

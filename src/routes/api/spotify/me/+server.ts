@@ -5,7 +5,7 @@ import { getValidAccessToken } from '$lib/server/tokens';
 
 export const GET: RequestHandler = async ({ locals }) => {
   if (!locals.user) throw error(401, 'not logged in');
-  const access_token = await getValidAccessToken(locals.user.id);
+  const { access_token } = await getValidAccessToken(locals.user.id);
   const me = await fetchSpotifyMe(access_token);
   return json(me);
 };

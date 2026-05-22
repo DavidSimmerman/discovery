@@ -68,8 +68,8 @@ function tokenRow(overrides: Record<string, unknown> = {}) {
 describe('getValidAccessToken', () => {
 	it('returns the cached token when not expired', async () => {
 		h.state.selectRows = [tokenRow()];
-		const token = await getValidAccessToken(USER);
-		expect(token).toBe('cached-access');
+		const result = await getValidAccessToken(USER);
+		expect(result.access_token).toBe('cached-access');
 		expect(refreshAccessToken).not.toHaveBeenCalled();
 	});
 
@@ -80,8 +80,8 @@ describe('getValidAccessToken', () => {
 			refresh_token: 'new-refresh',
 			expires_in: 3600,
 		});
-		const token = await getValidAccessToken(USER);
-		expect(token).toBe('fresh-access');
+		const result = await getValidAccessToken(USER);
+		expect(result.access_token).toBe('fresh-access');
 		expect(refreshAccessToken).toHaveBeenCalledWith('old-refresh');
 		expect(setSpy).toHaveBeenCalledWith(
 			expect.objectContaining({ accessToken: 'fresh-access' })
@@ -120,8 +120,27 @@ describe('getValidAccessToken', () => {
 		resolveRefresh({ access_token: 'fresh-access', refresh_token: 'new-refresh', expires_in: 3600 });
 
 		const [t1, t2] = await Promise.all([p1, p2]);
-		expect(t1).toBe('fresh-access');
-		expect(t2).toBe('fresh-access');
+		expect(t1.access_token).toBe('fresh-access');
+		expect(t2.access_token).toBe('fresh-access');
 		expect(refreshAccessToken).toHaveBeenCalledTimes(1);
+	});
+
+	it('propagates refresh failure and clears in-flight so a later call retries', async () => {
+		h.state.selectRows = [tokenRow({ expiresAt: new Date(Date.now() - 1000) })];
+		refreshAccessToken
+			.mockRejectedValueOnce(new Error('spotify down'))
+			.mockResolvedValueOnce({
+				access_token: 'fresh-access',
+				refresh_token: 'new-refresh',
+				expires_in: 3600,
+			});
+
+		await expect(getValidAccessToken(USER)).rejects.toThrow('spotify down');
+
+		// The failed promise must have been evicted from the in-flight map,
+		// so a subsequent call attempts the refresh again rather than reusing it.
+		const result = await getValidAccessToken(USER);
+		expect(result.access_token).toBe('fresh-access');
+		expect(refreshAccessToken).toHaveBeenCalledTimes(2);
 	});
 });

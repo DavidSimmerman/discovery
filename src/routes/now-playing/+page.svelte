@@ -134,7 +134,14 @@
   });
 </script>
 
-<main class="flex min-h-screen flex-col items-center justify-center gap-6 p-6">
+<main class="relative flex min-h-screen flex-col items-center justify-center gap-6 p-6">
+  <a
+    href="/library"
+    class="absolute right-4 top-4 text-sm text-spotify-green hover:underline"
+  >
+    Library
+  </a>
+
   <NowPlaying {playing} {rating} {loading} onrate={handleRate} />
 
   {#if playing}

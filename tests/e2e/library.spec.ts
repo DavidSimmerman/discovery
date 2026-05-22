@@ -1,0 +1,137 @@
+import { test, expect } from '@playwright/test';
+import {
+  seedTestUser,
+  teardownTestUser,
+  seedLibrary,
+  cleanupLibrary,
+  closeSeedConnection,
+  signSessionCookieValue,
+  SESSION_COOKIE_NAME,
+  testUserId,
+  testSpotifyId,
+} from './fixtures/seed';
+
+// Library screen e2e. Same harness as rating/labels specs: OAuth bypassed via an
+// injected signed session cookie for a per-worker seeded user. The library does
+// NOT call Spotify, so there's no currently-playing mock — instead we seed
+// tracks + ratings + labels + track_labels directly so there's a library to
+// browse. Track URIs are namespaced per worker (the shared, non-cascading
+// `tracks` table is the only cross-worker collision risk).
+
+test.beforeEach(async ({ context }) => {
+  const workerIndex = test.info().workerIndex;
+  await seedTestUser(testUserId(workerIndex), testSpotifyId(workerIndex));
+  await seedLibrary(testUserId(workerIndex), workerIndex);
+  await context.addCookies([
+    {
+      name: SESSION_COOKIE_NAME,
+      value: signSessionCookieValue(testUserId(workerIndex)),
+      url: 'http://127.0.0.1:5173',
+    },
+  ]);
+});
+
+test.afterEach(async () => {
+  const workerIndex = test.info().workerIndex;
+  await teardownTestUser(testUserId(workerIndex));
+  await cleanupLibrary(workerIndex);
+});
+
+test.afterAll(async () => {
+  await closeSeedConnection();
+});
+
+const title = (page: import('@playwright/test').Page, text: string) =>
+  page.getByText(text, { exact: true });
+
+test('list: renders all seeded tracks and the header count', async ({ page }) => {
+  await page.goto('/library');
+
+  await expect(title(page, 'Midnight City')).toBeVisible();
+  await expect(title(page, 'Strobe')).toBeVisible();
+  await expect(title(page, 'Levitating')).toBeVisible();
+  await expect(title(page, 'Time')).toBeVisible();
+
+  // Header count reflects the 4 seeded tracks.
+  await expect(page.getByRole('heading', { name: 'Library' })).toContainText('4');
+});
+
+test('search by title: narrows to the matching track, clears to restore all', async ({ page }) => {
+  await page.goto('/library');
+  await expect(title(page, 'Midnight City')).toBeVisible();
+
+  const searchBox = page.getByRole('textbox', { name: 'Search your library' });
+  await searchBox.fill('Strobe');
+
+  await expect(title(page, 'Strobe')).toBeVisible();
+  await expect(title(page, 'Midnight City')).toHaveCount(0);
+
+  await searchBox.fill('');
+  await expect(title(page, 'Midnight City')).toBeVisible();
+  await expect(title(page, 'Time')).toBeVisible();
+});
+
+test('search by label: surfaces tracks carrying the matched label', async ({ page }) => {
+  await page.goto('/library');
+  await expect(title(page, 'Midnight City')).toBeVisible();
+
+  await page.getByRole('textbox', { name: 'Search your library' }).fill('synth');
+
+  // Only "Midnight City" has the synth label.
+  await expect(title(page, 'Midnight City')).toBeVisible();
+  await expect(title(page, 'Strobe')).toHaveCount(0);
+  await expect(title(page, 'Levitating')).toHaveCount(0);
+  await expect(title(page, 'Time')).toHaveCount(0);
+});
+
+test('filter by rating bucket: ★★★★+ and ★★★★★ chips constrain by minRating', async ({ page }) => {
+  await page.goto('/library');
+  await expect(title(page, 'Midnight City')).toBeVisible();
+
+  // ★★★★+ → minRating 8: Midnight City (10) + Strobe (9) remain.
+  await page.getByRole('button', { name: '★★★★+' }).click();
+  await expect(title(page, 'Midnight City')).toBeVisible();
+  await expect(title(page, 'Strobe')).toBeVisible();
+  await expect(title(page, 'Levitating')).toHaveCount(0);
+  await expect(title(page, 'Time')).toHaveCount(0);
+
+  // ★★★★★ → minRating 10: only Midnight City.
+  await page.getByRole('button', { name: '★★★★★' }).click();
+  await expect(title(page, 'Midnight City')).toBeVisible();
+  await expect(title(page, 'Strobe')).toHaveCount(0);
+
+  // Toggle off → all return.
+  await page.getByRole('button', { name: '★★★★★' }).click();
+  await expect(title(page, 'Midnight City')).toBeVisible();
+  await expect(title(page, 'Strobe')).toBeVisible();
+  await expect(title(page, 'Levitating')).toBeVisible();
+  await expect(title(page, 'Time')).toBeVisible();
+});
+
+test('filter by label chip: a top label chip constrains then clears', async ({ page }) => {
+  await page.goto('/library');
+  await expect(title(page, 'Midnight City')).toBeVisible();
+
+  // "night drive" is on 2 tracks → a top label, surfaced as a facet chip.
+  const chip = page.getByRole('button', { name: 'night drive' });
+  await expect(chip).toBeVisible();
+
+  await chip.click();
+  await expect(title(page, 'Midnight City')).toBeVisible();
+  await expect(title(page, 'Strobe')).toBeVisible();
+  await expect(title(page, 'Levitating')).toHaveCount(0);
+  await expect(title(page, 'Time')).toHaveCount(0);
+
+  // Click again to clear → all return.
+  await chip.click();
+  await expect(title(page, 'Levitating')).toBeVisible();
+  await expect(title(page, 'Time')).toBeVisible();
+});
+
+test('api: /api/library?minRating=8 returns the high-rated rows', async ({ page }) => {
+  const res = await page.request.get('/api/library?minRating=8');
+  expect(res.ok()).toBe(true);
+  const data = (await res.json()) as { rows: { title: string }[] };
+  const titles = data.rows.map((r) => r.title).sort();
+  expect(titles).toEqual(['Midnight City', 'Strobe']);
+});

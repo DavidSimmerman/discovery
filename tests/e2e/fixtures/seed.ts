@@ -83,6 +83,82 @@ export async function getLabelByName(
   return row ? { id: row.id, lastUsedAt: row.last_used_at } : null;
 }
 
+// --- Library seed -----------------------------------------------------------
+// The `tracks` table is NOT user-scoped and does NOT cascade on user delete, so
+// parallel workers would collide on a shared track URI and teardown would leak
+// rows. We namespace each track URI by workerIndex: a fixed 21-char base + a
+// single index digit → a unique, realistic-looking `spotify:track:<22 chars>`.
+const TRACK_BASE = ['Midntcity', 'Strobedeadm', 'Levitating', 'TimeHansZmr'];
+
+function trackUri(workerIndex: number, slot: number): string {
+  // 22-char id: per-track prefix padded, then the worker index, kept to 22 chars.
+  const id = `${TRACK_BASE[slot]}${String(workerIndex).padStart(4, '0')}`.padEnd(22, '0').slice(0, 22);
+  return `spotify:track:${id}`;
+}
+
+type LibSeedTrack = {
+  slot: number;
+  title: string;
+  artists: string[];
+  rating: number;
+  labels: string[];
+};
+
+const LIBRARY_FIXTURE: LibSeedTrack[] = [
+  { slot: 0, title: 'Midnight City', artists: ['M83'], rating: 10, labels: ['night drive', 'synth'] },
+  { slot: 1, title: 'Strobe', artists: ['deadmau5'], rating: 9, labels: ['night drive'] },
+  { slot: 2, title: 'Levitating', artists: ['Dua Lipa'], rating: 6, labels: ['pop'] },
+  { slot: 3, title: 'Time', artists: ['Hans Zimmer'], rating: 4, labels: [] },
+];
+
+/** URIs this worker seeds — used for teardown of the non-cascading tracks table. */
+export function libraryTrackUris(workerIndex: number): string[] {
+  return LIBRARY_FIXTURE.map((t) => trackUri(workerIndex, t.slot));
+}
+
+/**
+ * Seeds a fixed library for the per-worker user: tracks (shared table, namespaced
+ * URIs), ratings + labels + track_labels (user-scoped, cascade on user delete).
+ * Designed to exercise search (title/artist/label) and both filters (rating, label).
+ */
+export async function seedLibrary(userId: string, workerIndex: number): Promise<void> {
+  // Dedupe label names per user → name → label id.
+  const labelIds = new Map<string, string>();
+  const allNames = [...new Set(LIBRARY_FIXTURE.flatMap((t) => t.labels))];
+  for (const name of allNames) {
+    const rows = await sql<{ id: string }[]>`
+      INSERT INTO labels (user_id, name) VALUES (${userId}, ${name})
+      RETURNING id
+    `;
+    labelIds.set(name, rows[0].id);
+  }
+
+  for (const t of LIBRARY_FIXTURE) {
+    const uri = trackUri(workerIndex, t.slot);
+    await sql`
+      INSERT INTO tracks (spotify_track_uri, title, artists, album_art_url)
+      VALUES (${uri}, ${t.title}, ${t.artists}, ${null})
+      ON CONFLICT (spotify_track_uri) DO UPDATE
+        SET title = EXCLUDED.title, artists = EXCLUDED.artists
+    `;
+    await sql`
+      INSERT INTO ratings (user_id, spotify_track_uri, rating_half_steps)
+      VALUES (${userId}, ${uri}, ${t.rating})
+    `;
+    for (const name of t.labels) {
+      await sql`
+        INSERT INTO track_labels (user_id, spotify_track_uri, label_id)
+        VALUES (${userId}, ${uri}, ${labelIds.get(name)!})
+      `;
+    }
+  }
+}
+
+/** Deletes the worker's seeded tracks rows (tracks does NOT cascade on user delete). */
+export async function cleanupLibrary(workerIndex: number): Promise<void> {
+  await sql`DELETE FROM tracks WHERE spotify_track_uri = ANY(${libraryTrackUris(workerIndex)})`;
+}
+
 export async function closeSeedConnection(): Promise<void> {
   await sql.end({ timeout: 5 });
 }

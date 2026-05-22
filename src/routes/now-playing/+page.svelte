@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import NowPlaying from '$lib/components/NowPlaying.svelte';
+  import LabelChips from '$lib/components/LabelChips.svelte';
 
   type Playing = {
     uri: string;
@@ -135,6 +136,10 @@
 
 <main class="flex min-h-screen flex-col items-center justify-center gap-6 p-6">
   <NowPlaying {playing} {rating} {loading} onrate={handleRate} />
+
+  {#if playing}
+    <LabelChips trackUri={playing.uri} />
+  {/if}
 
   <div aria-live="polite" class="min-h-5 text-sm text-red-400">
     {#if error}{error}{/if}

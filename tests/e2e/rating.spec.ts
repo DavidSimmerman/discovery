@@ -6,7 +6,8 @@ import {
   getRating,
   signSessionCookieValue,
   SESSION_COOKIE_NAME,
-  TEST_USER_ID,
+  testUserId,
+  testSpotifyId,
 } from './fixtures/seed';
 import {
   mockCurrentlyPlaying,
@@ -21,19 +22,25 @@ import {
 // (/api/spotify/currently-playing) is stubbed at the browser boundary while the
 // real /api/ratings endpoint persists to the test DB.
 
+// Disjoint user per Playwright worker so parallel workers never seed/teardown the
+// same row. workerIndex is stable for the life of a worker, so the id is the same
+// across this worker's beforeEach/afterEach.
+const userId = () => testUserId(test.info().workerIndex);
+
 test.beforeEach(async ({ context }) => {
-  await seedTestUser();
+  const workerIndex = test.info().workerIndex;
+  await seedTestUser(testUserId(workerIndex), testSpotifyId(workerIndex));
   await context.addCookies([
     {
       name: SESSION_COOKIE_NAME,
-      value: signSessionCookieValue(TEST_USER_ID),
+      value: signSessionCookieValue(testUserId(workerIndex)),
       url: 'http://127.0.0.1:5173',
     },
   ]);
 });
 
 test.afterEach(async () => {
-  await teardownTestUser();
+  await teardownTestUser(testUserId(test.info().workerIndex));
 });
 
 test.afterAll(async () => {
@@ -68,7 +75,7 @@ test('rate: tapping the 4th star full zone persists rating 8', async ({ page }) 
   await expect(slider).toHaveAttribute('aria-valuenow', '8');
 
   // True persistence: the row really landed in the DB.
-  await expect.poll(() => getRating(FIXTURE_TRACK_URI)).toBe(8);
+  await expect.poll(() => getRating(userId(), FIXTURE_TRACK_URI)).toBe(8);
 
   // Reload with the persisted rating served by the mock → UI rehydrates to 8.
   fixture = trackFixture(8);
@@ -101,7 +108,7 @@ test('clear: tapping the same zone again removes the rating', async ({ page }) =
   await expect(slider).toHaveAttribute('aria-valuenow', '0');
 
   // DB row is gone.
-  await expect.poll(() => getRating(FIXTURE_TRACK_URI)).toBeNull();
+  await expect.poll(() => getRating(userId(), FIXTURE_TRACK_URI)).toBeNull();
 
   // Reload with no rating → UI stays at 0.
   fixture = trackFixture(null);

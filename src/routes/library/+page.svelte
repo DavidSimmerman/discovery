@@ -100,6 +100,7 @@
     type="text"
     bind:value={search}
     oninput={onSearchInput}
+    maxlength="100"
     aria-label="Search your library"
     placeholder="Search…"
     class="w-full rounded-lg border border-white/20 bg-white/5 px-3 py-2 text-sm text-white placeholder:text-white/40 focus:border-spotify-green focus:outline-none"

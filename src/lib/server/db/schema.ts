@@ -8,6 +8,7 @@ import {
   integer,
   primaryKey,
   check,
+  unique,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 
@@ -57,6 +58,35 @@ export const ratings = pgTable(
     primaryKey({ columns: [table.userId, table.spotifyTrackUri] }),
     check('rating_half_steps_range', sql`${table.ratingHalfSteps} between 1 and 10`),
   ],
+);
+
+export const labels = pgTable(
+  'labels',
+  {
+    id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }).defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+  },
+  (table) => [unique().on(table.userId, table.name)],
+);
+
+export const trackLabels = pgTable(
+  'track_labels',
+  {
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    spotifyTrackUri: text('spotify_track_uri').notNull(),
+    labelId: uuid('label_id')
+      .notNull()
+      .references(() => labels.id, { onDelete: 'cascade' }),
+    appliedAt: timestamp('applied_at', { withTimezone: true }).defaultNow(),
+  },
+  (table) => [primaryKey({ columns: [table.userId, table.spotifyTrackUri, table.labelId] })],
 );
 
 export type User = typeof users.$inferSelect;

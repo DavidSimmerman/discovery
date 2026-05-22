@@ -15,6 +15,13 @@
       "when": 1779409703660,
       "tag": "0001_heavy_storm",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1779415921180,
+      "tag": "0002_slimy_firestar",
+      "breakpoints": true
     }
   ]
 }

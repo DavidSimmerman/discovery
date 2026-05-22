@@ -67,3 +67,35 @@ export async function fetchSpotifyMe(accessToken: string): Promise<{ id: string;
   if (!res.ok) throw new Error(`Spotify /me failed: ${res.status}`);
   return res.json();
 }
+
+export interface SpotifyTrack {
+  uri: string;
+  name: string;
+  artists: { name: string }[];
+  album: { name: string; images: { url: string; width: number; height: number }[] };
+  duration_ms: number;
+  external_ids?: { isrc?: string };
+}
+
+export interface CurrentlyPlaying {
+  is_playing: boolean;
+  progress_ms: number | null;
+  item: SpotifyTrack | null;
+}
+
+export async function fetchCurrentlyPlaying(accessToken: string): Promise<CurrentlyPlaying | null> {
+  const res = await fetch('https://api.spotify.com/v1/me/player/currently-playing', {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (res.status === 204) return null; // nothing playing
+  if (!res.ok) throw new Error(`Spotify currently-playing failed: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchTrack(accessToken: string, trackId: string): Promise<SpotifyTrack> {
+  const res = await fetch(`https://api.spotify.com/v1/tracks/${trackId}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok) throw new Error(`Spotify track fetch failed: ${res.status}`);
+  return res.json();
+}

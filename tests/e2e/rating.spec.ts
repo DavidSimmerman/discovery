@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page, type Locator } from '@playwright/test';
 import {
   seedTestUser,
   teardownTestUser,
@@ -26,6 +26,31 @@ import {
 // same row. workerIndex is stable for the life of a worker, so the id is the same
 // across this worker's beforeEach/afterEach.
 const userId = () => testUserId(test.info().workerIndex);
+
+// Map a half-step (1-10) to an x-offset within the 5-star slider: odd = left half
+// of a star, even = right half.
+function offsetForHalfStep(width: number, half: number): number {
+  const starW = width / 5;
+  const idx = Math.ceil(half / 2) - 1;
+  const within = half % 2 === 1 ? 0.25 : 0.75;
+  return idx * starW + within * starW;
+}
+
+async function tapHalfStep(page: Page, slider: Locator, half: number) {
+  const box = await slider.boundingBox();
+  if (!box) throw new Error('slider has no bounding box');
+  await page.mouse.click(box.x + offsetForHalfStep(box.width, half), box.y + box.height / 2);
+}
+
+async function dragToHalfStep(page: Page, slider: Locator, from: number, to: number) {
+  const box = await slider.boundingBox();
+  if (!box) throw new Error('slider has no bounding box');
+  const y = box.y + box.height / 2;
+  await page.mouse.move(box.x + offsetForHalfStep(box.width, from), y);
+  await page.mouse.down();
+  await page.mouse.move(box.x + offsetForHalfStep(box.width, to), y, { steps: 10 });
+  await page.mouse.up();
+}
 
 test.beforeEach(async ({ context }) => {
   const workerIndex = test.info().workerIndex;
@@ -57,11 +82,11 @@ test('rate: tapping the 4th star full zone persists rating 8', async ({ page }) 
   const slider = page.getByRole('slider', { name: 'Rating' });
   await expect(slider).toHaveAttribute('aria-valuenow', '0');
 
-  // 4th star, full (right) zone → 8 half-steps.
+  // Tap the right half of the 4th star → 8 half-steps.
   const ratePut = page.waitForRequest(
     (req) => req.url().endsWith('/api/ratings') && req.method() === 'PUT',
   );
-  await page.getByRole('button', { name: '8 half-steps' }).click();
+  await tapHalfStep(page, slider, 8);
 
   const req = await ratePut;
   expect(req.postDataJSON()).toMatchObject({
@@ -86,6 +111,35 @@ test('rate: tapping the 4th star full zone persists rating 8', async ({ page }) 
   );
 });
 
+test('drag: pressing and dragging across the stars persists the released value', async ({
+  page,
+}) => {
+  let fixture: CurrentlyPlayingFixture = trackFixture(null);
+  await mockCurrentlyPlaying(page, () => fixture);
+
+  await page.goto('/now-playing');
+  await expect(page.getByRole('heading', { name: 'Test Track Title' })).toBeVisible();
+
+  const slider = page.getByRole('slider', { name: 'Rating' });
+  await expect(slider).toHaveAttribute('aria-valuenow', '0');
+
+  // Press near the 1st star and drag to the right half of the 4th star → 8.
+  const ratePut = page.waitForRequest(
+    (req) => req.url().endsWith('/api/ratings') && req.method() === 'PUT',
+  );
+  await dragToHalfStep(page, slider, 2, 8);
+
+  const req = await ratePut;
+  expect(req.postDataJSON()).toMatchObject({
+    spotifyTrackUri: FIXTURE_TRACK_URI,
+    ratingHalfSteps: 8,
+  });
+  expect((await req.response())?.status()).toBe(200);
+
+  await expect(slider).toHaveAttribute('aria-valuenow', '8');
+  await expect.poll(() => getRating(userId(), FIXTURE_TRACK_URI)).toBe(8);
+});
+
 test('clear: tapping the same zone again removes the rating', async ({ page }) => {
   let fixture: CurrentlyPlayingFixture = trackFixture(8);
   await mockCurrentlyPlaying(page, () => fixture);
@@ -94,11 +148,11 @@ test('clear: tapping the same zone again removes the rating', async ({ page }) =
   const slider = page.getByRole('slider', { name: 'Rating' });
   await expect(slider).toHaveAttribute('aria-valuenow', '8');
 
-  // Tapping the already-set zone (8) clears → DELETE.
+  // Tapping the already-set value (8) without dragging clears → DELETE.
   const rateDelete = page.waitForRequest(
     (req) => req.url().endsWith('/api/ratings') && req.method() === 'DELETE',
   );
-  await page.getByRole('button', { name: '8 half-steps' }).click();
+  await tapHalfStep(page, slider, 8);
 
   const req = await rateDelete;
   expect(req.postDataJSON()).toMatchObject({ spotifyTrackUri: FIXTURE_TRACK_URI });

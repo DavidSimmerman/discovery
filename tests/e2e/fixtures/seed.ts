@@ -58,6 +58,31 @@ export async function getRating(userId: string, spotifyTrackUri: string): Promis
   return rows[0]?.rating_half_steps ?? null;
 }
 
+/** Names of labels applied to a track for the user (track_labels → labels join). */
+export async function getTrackLabels(userId: string, spotifyTrackUri: string): Promise<string[]> {
+  const rows = await sql<{ name: string }[]>`
+    SELECT l.name
+    FROM track_labels tl
+    JOIN labels l ON l.id = tl.label_id
+    WHERE tl.user_id = ${userId} AND tl.spotify_track_uri = ${spotifyTrackUri}
+    ORDER BY l.name
+  `;
+  return rows.map((r) => r.name);
+}
+
+/** A label row by name (for existence + MRU comparisons). */
+export async function getLabelByName(
+  userId: string,
+  name: string,
+): Promise<{ id: string; lastUsedAt: Date } | null> {
+  const rows = await sql<{ id: string; last_used_at: Date }[]>`
+    SELECT id, last_used_at FROM labels
+    WHERE user_id = ${userId} AND name = ${name}
+  `;
+  const row = rows[0];
+  return row ? { id: row.id, lastUsedAt: row.last_used_at } : null;
+}
+
 export async function closeSeedConnection(): Promise<void> {
   await sql.end({ timeout: 5 });
 }

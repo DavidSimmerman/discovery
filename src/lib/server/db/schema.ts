@@ -68,8 +68,8 @@ export const labels = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
-    lastUsedAt: timestamp('last_used_at', { withTimezone: true }).defaultNow(),
-    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [unique().on(table.userId, table.name)],
 );
@@ -84,7 +84,7 @@ export const trackLabels = pgTable(
     labelId: uuid('label_id')
       .notNull()
       .references(() => labels.id, { onDelete: 'cascade' }),
-    appliedAt: timestamp('applied_at', { withTimezone: true }).defaultNow(),
+    appliedAt: timestamp('applied_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [primaryKey({ columns: [table.userId, table.spotifyTrackUri, table.labelId] })],
 );

@@ -2,8 +2,8 @@ CREATE TABLE "labels" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"user_id" uuid NOT NULL,
 	"name" text NOT NULL,
-	"last_used_at" timestamp with time zone DEFAULT now(),
-	"created_at" timestamp with time zone DEFAULT now(),
+	"last_used_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "labels_user_id_name_unique" UNIQUE("user_id","name")
 );
 --> statement-breakpoint
@@ -11,7 +11,7 @@ CREATE TABLE "track_labels" (
 	"user_id" uuid NOT NULL,
 	"spotify_track_uri" text NOT NULL,
 	"label_id" uuid NOT NULL,
-	"applied_at" timestamp with time zone DEFAULT now(),
+	"applied_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "track_labels_user_id_spotify_track_uri_label_id_pk" PRIMARY KEY("user_id","spotify_track_uri","label_id")
 );
 --> statement-breakpoint

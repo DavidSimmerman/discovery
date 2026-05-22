@@ -1,5 +1,5 @@
 {
-  "id": "285ae9a4-d967-4b83-8821-417751946e03",
+  "id": "714f920f-eda7-4c52-91c9-d0dc15e1a7ed",
   "prevId": "6218ebaf-5a27-45e7-954f-967519396bf6",
   "version": "7",
   "dialect": "postgresql",
@@ -31,14 +31,14 @@
           "name": "last_used_at",
           "type": "timestamp with time zone",
           "primaryKey": false,
-          "notNull": false,
+          "notNull": true,
           "default": "now()"
         },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
           "primaryKey": false,
-          "notNull": false,
+          "notNull": true,
           "default": "now()"
         }
       },
@@ -228,7 +228,7 @@
           "name": "applied_at",
           "type": "timestamp with time zone",
           "primaryKey": false,
-          "notNull": false,
+          "notNull": true,
           "default": "now()"
         }
       },

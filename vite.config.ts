@@ -6,6 +6,7 @@ import { defineConfig } from 'vite';
 export default defineConfig({
 	plugins: [tailwindcss(), sveltekit()],
 	test: {
-		include: ['tests/unit/**/*.test.ts']
+		include: ['tests/unit/**/*.test.ts'],
+		environment: 'jsdom'
 	}
 });

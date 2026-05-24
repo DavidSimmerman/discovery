@@ -60,7 +60,9 @@ export async function refreshAccessToken(refreshToken: string): Promise<TokenSet
   return { ...json, refresh_token: json.refresh_token ?? refreshToken };
 }
 
-export async function fetchSpotifyMe(accessToken: string): Promise<{ id: string; display_name: string | null; email?: string }> {
+export async function fetchSpotifyMe(
+  accessToken: string,
+): Promise<{ id: string; display_name: string | null; email?: string; product: 'premium' | 'free' | 'open' }> {
   const res = await fetch('https://api.spotify.com/v1/me', {
     headers: { Authorization: `Bearer ${accessToken}` },
   });

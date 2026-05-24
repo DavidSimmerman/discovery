@@ -26,11 +26,11 @@ export const GET: RequestHandler = async ({ url, cookies }) => {
   if (existing[0]) {
     userId = existing[0].id;
     await db.update(users)
-      .set({ displayName: me.display_name })
+      .set({ displayName: me.display_name, product: me.product })
       .where(eq(users.id, userId));
   } else {
     const inserted = await db.insert(users)
-      .values({ spotifyId: me.id, displayName: me.display_name })
+      .values({ spotifyId: me.id, displayName: me.display_name, product: me.product })
       .returning({ id: users.id });
     userId = inserted[0].id;
   }

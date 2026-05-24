@@ -9,7 +9,12 @@ export const handle: Handle = async ({ event, resolve }) => {
   if (userId) {
     const row = await db.select().from(users).where(eq(users.id, userId)).limit(1);
     event.locals.user = row[0]
-      ? { id: row[0].id, spotifyId: row[0].spotifyId, displayName: row[0].displayName }
+      ? {
+          id: row[0].id,
+          spotifyId: row[0].spotifyId,
+          displayName: row[0].displayName,
+          product: row[0].product as 'premium' | 'free' | 'open',
+        }
       : null;
   } else {
     event.locals.user = null;

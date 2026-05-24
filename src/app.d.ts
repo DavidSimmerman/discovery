@@ -1,7 +1,12 @@
 declare global {
   namespace App {
     interface Locals {
-      user: { id: string; spotifyId: string; displayName: string | null } | null;
+      user: {
+        id: string;
+        spotifyId: string;
+        displayName: string | null;
+        product: 'premium' | 'free' | 'open';
+      } | null;
     }
   }
 }

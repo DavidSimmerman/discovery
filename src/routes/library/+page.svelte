@@ -1,6 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import LibraryRow from '$lib/components/LibraryRow.svelte';
+  import { getPlaybackStore } from '$lib/playback/player.svelte';
+  import ShuffleButton from '$lib/components/ShuffleButton.svelte';
+  import PremiumGate from '$lib/components/PremiumGate.svelte';
+  import { page } from '$app/state';
 
   type Row = {
     uri: string;
@@ -33,6 +37,23 @@
   );
 
   let searchTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const playback = getPlaybackStore();
+  const product = $derived(page.data.user?.product ?? 'open');
+
+  function onRowClick(uri: string) {
+    const all = rows.map((r) => r.uri);
+    void playback.playTrack(uri, all);
+  }
+
+  async function getCurrentFilterUris(): Promise<readonly string[]> {
+    const qs = new URLSearchParams(page.url.searchParams);
+    qs.set('limit', '500');
+    const res = await fetch(`/api/library?${qs.toString()}`);
+    if (!res.ok) return rows.map((r) => r.uri);
+    const j = (await res.json()) as { rows: { uri: string }[] };
+    return j.rows.map((r) => r.uri);
+  }
 
   async function load() {
     loading = true;
@@ -106,43 +127,46 @@
     class="w-full rounded-lg border border-white/20 bg-white/5 px-3 py-2 text-sm text-white placeholder:text-white/40 focus:border-spotify-green focus:outline-none"
   />
 
-  <div class="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
-    <button
-      type="button"
-      aria-pressed={minRating === 10}
-      onclick={() => toggleRating(10)}
-      class="flex-shrink-0 whitespace-nowrap rounded-full px-3 py-1 text-sm transition-colors {minRating ===
-      10
-        ? 'bg-spotify-green text-black'
-        : 'bg-white/10 text-white/70 hover:bg-white/20'}"
-    >
-      ★★★★★
-    </button>
-    <button
-      type="button"
-      aria-pressed={minRating === 8}
-      onclick={() => toggleRating(8)}
-      class="flex-shrink-0 whitespace-nowrap rounded-full px-3 py-1 text-sm transition-colors {minRating ===
-      8
-        ? 'bg-spotify-green text-black'
-        : 'bg-white/10 text-white/70 hover:bg-white/20'}"
-    >
-      ★★★★+
-    </button>
-
-    {#each facets.topLabels as label (label.name)}
+  <div class="flex items-center gap-2">
+    <div class="-mx-1 flex flex-1 gap-2 overflow-x-auto px-1 pb-1">
       <button
         type="button"
-        aria-pressed={activeLabel === label.name}
-        onclick={() => toggleLabel(label.name)}
-        class="flex-shrink-0 whitespace-nowrap rounded-full px-3 py-1 text-sm transition-colors {activeLabel ===
-        label.name
+        aria-pressed={minRating === 10}
+        onclick={() => toggleRating(10)}
+        class="flex-shrink-0 whitespace-nowrap rounded-full px-3 py-1 text-sm transition-colors {minRating ===
+        10
           ? 'bg-spotify-green text-black'
           : 'bg-white/10 text-white/70 hover:bg-white/20'}"
       >
-        {label.name}
+        ★★★★★
       </button>
-    {/each}
+      <button
+        type="button"
+        aria-pressed={minRating === 8}
+        onclick={() => toggleRating(8)}
+        class="flex-shrink-0 whitespace-nowrap rounded-full px-3 py-1 text-sm transition-colors {minRating ===
+        8
+          ? 'bg-spotify-green text-black'
+          : 'bg-white/10 text-white/70 hover:bg-white/20'}"
+      >
+        ★★★★+
+      </button>
+
+      {#each facets.topLabels as label (label.name)}
+        <button
+          type="button"
+          aria-pressed={activeLabel === label.name}
+          onclick={() => toggleLabel(label.name)}
+          class="flex-shrink-0 whitespace-nowrap rounded-full px-3 py-1 text-sm transition-colors {activeLabel ===
+          label.name
+            ? 'bg-spotify-green text-black'
+            : 'bg-white/10 text-white/70 hover:bg-white/20'}"
+        >
+          {label.name}
+        </button>
+      {/each}
+    </div>
+    <PremiumGate {product}><ShuffleButton store={playback} getUris={getCurrentFilterUris} label="Shuffle" /></PremiumGate>
   </div>
 
   <div aria-live="polite" class="min-h-5 text-sm text-red-400">
@@ -172,7 +196,7 @@
   {:else}
     <div class="flex flex-col gap-3">
       {#each rows as row (row.uri)}
-        <LibraryRow {row} />
+        <LibraryRow {row} onclick={onRowClick} isPlaying={playback.state.track?.uri === row.uri} />
       {/each}
     </div>
   {/if}

@@ -1,0 +1,1 @@
+ALTER TABLE "users" ADD COLUMN "product" text DEFAULT 'open' NOT NULL;

@@ -21,6 +21,7 @@ export const users = pgTable('users', {
   id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
   spotifyId: text('spotify_id').notNull().unique(),
   displayName: text('display_name'),
+  product: text('product').notNull().default('open'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
 

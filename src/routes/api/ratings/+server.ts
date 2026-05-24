@@ -6,6 +6,18 @@ import { and, eq } from 'drizzle-orm';
 
 const TRACK_URI_RE = /^spotify:track:[A-Za-z0-9]{22}$/;
 
+export const GET: RequestHandler = async ({ locals, url }) => {
+  if (!locals.user) throw error(401, 'not logged in');
+  const uri = url.searchParams.get('uri');
+  if (!uri) throw error(400, 'uri required');
+  const row = await db
+    .select({ ratingHalfSteps: ratings.ratingHalfSteps })
+    .from(ratings)
+    .where(and(eq(ratings.userId, locals.user.id), eq(ratings.spotifyTrackUri, uri)))
+    .limit(1);
+  return json({ ratingHalfSteps: row[0]?.ratingHalfSteps ?? null });
+};
+
 export const PUT: RequestHandler = async ({ locals, request }) => {
   if (!locals.user) throw error(401, 'not logged in');
 

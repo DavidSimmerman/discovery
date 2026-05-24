@@ -83,6 +83,7 @@ export interface CurrentlyPlaying {
   is_playing: boolean;
   progress_ms: number | null;
   item: SpotifyTrack | null;
+  context?: { uri: string | null } | null;
 }
 
 export async function fetchCurrentlyPlaying(accessToken: string): Promise<CurrentlyPlaying | null> {

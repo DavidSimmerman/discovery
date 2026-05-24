@@ -44,6 +44,7 @@ export const GET: RequestHandler = async ({ locals }) => {
         progressMs: result.progress_ms,
         isPlaying: result.is_playing,
         isrc: item.external_ids?.isrc ?? null,
+        contextUri: result.context?.uri ?? null,
       },
       rating: existing?.ratingHalfSteps ?? null,
     },

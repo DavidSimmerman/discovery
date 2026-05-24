@@ -15,14 +15,14 @@ function makeStore() {
 describe('<Transport />', () => {
   it('renders Play icon when paused, calls togglePlay on click', async () => {
     const store = makeStore();
-    const { getByLabelText } = render(Transport, { props: { store } });
+    const { getByLabelText } = render(Transport, { props: { store: store as unknown as import('$lib/playback/player.svelte').PlaybackStore } });
     const btn = getByLabelText(/play/i);
     await fireEvent.click(btn);
     expect(store.togglePlay).toHaveBeenCalled();
   });
   it('next/prev buttons call store methods', async () => {
     const store = makeStore();
-    const { getByLabelText } = render(Transport, { props: { store } });
+    const { getByLabelText } = render(Transport, { props: { store: store as unknown as import('$lib/playback/player.svelte').PlaybackStore } });
     await fireEvent.click(getByLabelText(/next/i));
     await fireEvent.click(getByLabelText(/previous/i));
     expect(store.next).toHaveBeenCalled();

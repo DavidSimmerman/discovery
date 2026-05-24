@@ -37,11 +37,15 @@ export function signSessionCookieValue(userId: string): string {
 export const SESSION_COOKIE_NAME = 'disccovery_session';
 
 /** Idempotent: delete then insert the test user. Ratings cascade on the delete. */
-export async function seedTestUser(userId: string, spotifyId: string): Promise<void> {
+export async function seedTestUser(
+  userId: string,
+  spotifyId: string,
+  product: 'premium' | 'free' | 'open' = 'premium',
+): Promise<void> {
   await sql`DELETE FROM users WHERE id = ${userId}`;
   await sql`
-    INSERT INTO users (id, spotify_id, display_name)
-    VALUES (${userId}, ${spotifyId}, ${TEST_DISPLAY_NAME})
+    INSERT INTO users (id, spotify_id, display_name, product)
+    VALUES (${userId}, ${spotifyId}, ${TEST_DISPLAY_NAME}, ${product})
   `;
 }
 

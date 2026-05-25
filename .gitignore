@@ -37,3 +37,6 @@ test-results/
 
 # Playwright live-test auth state
 .auth/
+
+# superpowers spec/plan scaffolding lives outside the repo (~/dev/disccovery-superpowers/)
+docs/superpowers/

@@ -60,7 +60,7 @@ export async function emitSdkState(
     ms.emit('player_state_changed', {
       paused: p.paused ?? false,
       position: p.position ?? 0,
-      duration: p.duration ?? p.track.album ? 200_000 : 0,
+      duration: p.duration ?? (p.track.album ? 200_000 : 0),
       context: { uri: p.contextUri ?? null },
       track_window: { current_track: p.track, previous_tracks: [], next_tracks: [] },
     });

@@ -37,7 +37,7 @@
     </p>
   </div>
 {:else}
-  <div class="flex flex-col items-center gap-6 text-center">
+  <div class="flex flex-col items-center gap-6 text-center" data-track-uri={playing?.uri ?? ''}>
     {#if playing.albumArtUrl}
       <img
         src={playing.albumArtUrl}

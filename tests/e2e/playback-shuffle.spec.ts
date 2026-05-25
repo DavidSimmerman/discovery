@@ -51,7 +51,7 @@ test('shuffle on /library uses current filter', async ({ page }) => {
   expect(lastBody.device_id).toBe('mock-device-1');
 });
 
-test('shuffle on /now-playing fetches full library', async ({ page }) => {
+test('shuffle on /now-playing fetches full library and sends non-empty uris', async ({ page }) => {
   // Spotify-elsewhere fixture so the page is in "remote control" mode.
   await page.route('**/api/spotify/currently-playing', (r) =>
     r.fulfill({
@@ -65,11 +65,16 @@ test('shuffle on /now-playing fetches full library', async ({ page }) => {
     libraryFetched = true;
     await route.continue();
   });
-  await page.route('**/api/spotify/player/play', (r) => r.fulfill({ status: 204 }));
+  let lastBody: { uris?: string[]; device_id?: string } = {};
+  await page.route('**/api/spotify/player/play', async (route) => {
+    lastBody = JSON.parse(route.request().postData() ?? '{}');
+    await route.fulfill({ status: 204 });
+  });
   await page.route('**/api/spotify/player/transfer', (r) => r.fulfill({ status: 204 }));
 
   await page.goto('/now-playing');
   await page.waitForLoadState('networkidle');
   await page.getByTestId('shuffle-button').click();
   await expect.poll(() => libraryFetched, { timeout: 5000 }).toBe(true);
+  await expect.poll(() => lastBody.uris?.length ?? 0, { timeout: 5000 }).toBeGreaterThan(0);
 });

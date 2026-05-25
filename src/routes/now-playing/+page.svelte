@@ -109,8 +109,8 @@
   async function shuffleEverything(): Promise<readonly string[]> {
     const res = await fetch('/api/library?limit=500');
     if (!res.ok) return [];
-    const j = (await res.json()) as { rows: { spotifyTrackUri: string }[] };
-    return j.rows.map((r) => r.spotifyTrackUri);
+    const j = (await res.json()) as { rows: { uri: string }[] };
+    return j.rows.map((r) => r.uri);
   }
 
   onMount(() => {
@@ -125,10 +125,11 @@
   });
 
   // Keep the rating in sync with the SDK's current track when disccovery owns audio.
+  // Derive the URI only so the effect doesn't re-run on every position tick.
+  const activeUri = $derived(playback.isActive ? (playback.state.track?.uri ?? null) : null);
   $effect(() => {
-    if (!playback.isActive || !playback.state.track) return;
-    const uri = playback.state.track.uri;
-    // Best-effort: fetch the current rating for this URI.
+    const uri = activeUri;
+    if (!uri) return;
     fetch(`/api/ratings?uri=${encodeURIComponent(uri)}`).then(async (r) => {
       if (!r.ok) return;
       const j = (await r.json()) as { ratingHalfSteps: number | null };

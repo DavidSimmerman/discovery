@@ -36,7 +36,7 @@ test.afterAll(async () => {
   await closeSeedConnection();
 });
 
-test('mediaSession title is "4 Track Name" when rated 8 half-steps', async ({ page }) => {
+test('mediaSession title is "4★ Track Name" when rated 8 half-steps', async ({ page }) => {
   await page.route('**/api/spotify/player/transfer', (r) => r.fulfill({ status: 204 }));
   await page.route('**/api/spotify/player/play', (r) => r.fulfill({ status: 204 }));
   // Pre-stage the rating fetch the now-playing page does on track change.
@@ -59,9 +59,9 @@ test('mediaSession title is "4 Track Name" when rated 8 half-steps', async ({ pa
   // Wait for the rating fetch to complete and mediaSession to update.
   await page.waitForFunction(() => {
     const t = navigator.mediaSession?.metadata?.title ?? '';
-    return t.startsWith('4 ');
+    return t.startsWith('4★');
   });
 
   const title = await page.evaluate(() => navigator.mediaSession?.metadata?.title ?? '');
-  expect(title).toBe('4 My Track');
+  expect(title).toBe('4★ My Track');
 });

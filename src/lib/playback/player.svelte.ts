@@ -61,6 +61,9 @@ export interface PlaybackStore {
 
   // Rating bridge (set by the page that knows the current rating)
   setCurrentRating(uri: string, ratingHalfSteps: number | null): void;
+
+  // Current track's rating (reactive via ratingTrigger)
+  readonly currentRating: number | null;
 }
 
 export function createPlaybackStore(): PlaybackStore {
@@ -79,7 +82,9 @@ export function createPlaybackStore(): PlaybackStore {
   let tokenInflight: Promise<string> | null = null;
 
   // Last-known per-URI rating, used to render the lock-screen title.
+  // ratingTrigger increments on every write so components that read currentRating re-run.
   const ratingByUri = new Map<string, number | null>();
+  let ratingTrigger = $state(0);
 
   // Queue maintenance state.
   let lastShuffleFilterUris: string[] | null = null;
@@ -267,6 +272,7 @@ export function createPlaybackStore(): PlaybackStore {
 
   function setCurrentRating(uri: string, ratingHalfSteps: number | null): void {
     ratingByUri.set(uri, ratingHalfSteps);
+    ratingTrigger++;
     if (state.track?.uri === uri) setMediaMetadata(state.track, ratingHalfSteps);
   }
 
@@ -277,6 +283,12 @@ export function createPlaybackStore(): PlaybackStore {
     get isReady() { return isReady; },
     get deviceId() { return deviceId; },
     get isActive() { return isReady && state.track != null; },
+    get currentRating() {
+      // Reading ratingTrigger subscribes to it so Svelte re-evaluates on rating changes.
+      // eslint-disable-next-line @typescript-eslint/no-unused-expressions
+      ratingTrigger;
+      return state.track ? (ratingByUri.get(state.track.uri) ?? null) : null;
+    },
     init, destroy,
     playTrack, shuffle, takeover,
     togglePlay, next, prev, seek,

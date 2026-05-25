@@ -1,5 +1,6 @@
 <script lang="ts">
   import { goto } from '$app/navigation';
+  import { stars } from '$lib/playback/stars';
   import type { PlaybackStore } from '$lib/playback/player.svelte';
 
   let { store, currentRoute }: { store: PlaybackStore; currentRoute: string } = $props();
@@ -16,9 +17,20 @@
     onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && goto('/now-playing')}
     aria-label="Open now playing"
   >
-    <span class="block h-8 w-8 shrink-0 rounded bg-spotify-green/60"></span>
+    {#if store.state.track?.album?.images?.[0]?.url}
+      <img
+        src={store.state.track.album.images[0].url}
+        alt=""
+        class="block h-8 w-8 shrink-0 rounded object-cover"
+      />
+    {:else}
+      <span class="block h-8 w-8 shrink-0 rounded bg-spotify-green/60"></span>
+    {/if}
     <span class="flex min-w-0 flex-col">
-      <span class="truncate text-sm font-semibold text-white">{store.state.track.name}</span>
+      <span class="truncate text-sm font-semibold text-white">
+        {#if store.currentRating != null && store.currentRating > 0}
+          <span class="mr-1 text-spotify-green">{stars(store.currentRating)}</span>
+        {/if}{store.state.track.name}</span>
       <span class="truncate text-xs text-white/60">
         {store.state.track.artists.map((a) => a.name).join(', ')}
       </span>

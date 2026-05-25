@@ -28,6 +28,7 @@ function makeStore(active: boolean) {
     prev: vi.fn(),
     seek: vi.fn(),
     setCurrentRating: vi.fn(),
+    currentRating: null,
   };
 }
 

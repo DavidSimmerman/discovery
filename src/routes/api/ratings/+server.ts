@@ -10,6 +10,7 @@ export const GET: RequestHandler = async ({ locals, url }) => {
   if (!locals.user) throw error(401, 'not logged in');
   const uri = url.searchParams.get('uri');
   if (!uri) throw error(400, 'uri required');
+  if (!TRACK_URI_RE.test(uri)) throw error(400, 'invalid uri');
   const row = await db
     .select({ ratingHalfSteps: ratings.ratingHalfSteps })
     .from(ratings)

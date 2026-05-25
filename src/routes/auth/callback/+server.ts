@@ -20,17 +20,21 @@ export const GET: RequestHandler = async ({ url, cookies }) => {
   const tokenSet = await exchangeCode(code, verifier);
   const me = await fetchSpotifyMe(tokenSet.access_token);
 
+  // Normalize product to the known enum values; treat anything else as 'open'.
+  const product: 'premium' | 'free' | 'open' =
+    me.product === 'premium' || me.product === 'free' ? me.product : 'open';
+
   // Upsert user
   const existing = await db.select().from(users).where(eq(users.spotifyId, me.id)).limit(1);
   let userId: string;
   if (existing[0]) {
     userId = existing[0].id;
     await db.update(users)
-      .set({ displayName: me.display_name, product: me.product })
+      .set({ displayName: me.display_name, product })
       .where(eq(users.id, userId));
   } else {
     const inserted = await db.insert(users)
-      .values({ spotifyId: me.id, displayName: me.display_name, product: me.product })
+      .values({ spotifyId: me.id, displayName: me.display_name, product })
       .returning({ id: users.id });
     userId = inserted[0].id;
   }

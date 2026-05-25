@@ -16,7 +16,9 @@
 		"db:studio": "drizzle-kit studio",
 		"test": "vitest run",
 		"test:watch": "vitest",
-		"e2e": "playwright test"
+		"e2e": "playwright test --project=e2e",
+		"e2e:auth": "playwright test --project=live-setup --headed",
+		"e2e:live": "playwright test --project=live --headed"
 	},
 	"devDependencies": {
 		"@playwright/test": "^1.60.0",

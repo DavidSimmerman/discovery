@@ -34,3 +34,6 @@ test-results/
 
 # Claude Code local working dir (settings, screenshots)
 .claude/
+
+# Playwright live-test auth state
+.auth/

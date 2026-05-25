@@ -127,13 +127,13 @@
     class="w-full rounded-lg border border-white/20 bg-white/5 px-3 py-2 text-sm text-white placeholder:text-white/40 focus:border-spotify-green focus:outline-none"
   />
 
-  <div class="flex items-center gap-2">
-    <div class="-mx-1 flex flex-1 gap-2 overflow-x-auto px-1 pb-1">
+  <div class="flex items-start gap-2">
+    <div class="-mx-1 flex flex-1 flex-wrap gap-2 px-1 pb-1">
       <button
         type="button"
         aria-pressed={minRating === 10}
         onclick={() => toggleRating(10)}
-        class="flex-shrink-0 whitespace-nowrap rounded-full px-3 py-1 text-sm transition-colors {minRating ===
+        class="no-underline flex-shrink-0 whitespace-nowrap rounded-full px-3 py-1 text-sm transition-colors focus:outline-none {minRating ===
         10
           ? 'bg-spotify-green text-black'
           : 'bg-white/10 text-white/70 hover:bg-white/20'}"
@@ -144,7 +144,7 @@
         type="button"
         aria-pressed={minRating === 8}
         onclick={() => toggleRating(8)}
-        class="flex-shrink-0 whitespace-nowrap rounded-full px-3 py-1 text-sm transition-colors {minRating ===
+        class="no-underline flex-shrink-0 whitespace-nowrap rounded-full px-3 py-1 text-sm transition-colors focus:outline-none {minRating ===
         8
           ? 'bg-spotify-green text-black'
           : 'bg-white/10 text-white/70 hover:bg-white/20'}"
@@ -157,7 +157,7 @@
           type="button"
           aria-pressed={activeLabel === label.name}
           onclick={() => toggleLabel(label.name)}
-          class="flex-shrink-0 whitespace-nowrap rounded-full px-3 py-1 text-sm transition-colors {activeLabel ===
+          class="no-underline flex-shrink-0 whitespace-nowrap rounded-full px-3 py-1 text-sm transition-colors focus:outline-none {activeLabel ===
           label.name
             ? 'bg-spotify-green text-black'
             : 'bg-white/10 text-white/70 hover:bg-white/20'}"
@@ -166,7 +166,9 @@
         </button>
       {/each}
     </div>
-    <PremiumGate {product}><ShuffleButton store={playback} getUris={getCurrentFilterUris} label="Shuffle" /></PremiumGate>
+    <div class="flex-shrink-0">
+      <PremiumGate {product}><ShuffleButton store={playback} getUris={getCurrentFilterUris} label="Shuffle" /></PremiumGate>
+    </div>
   </div>
 
   <div aria-live="polite" class="min-h-5 text-sm text-red-400">

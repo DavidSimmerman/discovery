@@ -1,10 +1,13 @@
 /**
- * Render a rating (in half-step units, 0–10) as Unicode stars.
- * 0 / null → "". 1 → "½", 2 → "★", 3 → "★½", … 10 → "★★★★★".
+ * Render a rating (in half-step units, 0–10) as a short numeric string for use
+ * in window/lock-screen titles. 0/null → "". 1 → "0.5", 2 → "1", 3 → "1.5", …
+ * 10 → "5".
+ *
+ * The exported name stays `stars()` (used widely) — only the output format
+ * changes.
  */
 export function stars(halfSteps: number | null): string {
   if (halfSteps == null || halfSteps <= 0) return '';
-  const full = Math.floor(halfSteps / 2);
-  const half = halfSteps % 2 === 1;
-  return '★'.repeat(full) + (half ? '½' : '');
+  const v = halfSteps / 2;
+  return Number.isInteger(v) ? String(v) : v.toFixed(1);
 }

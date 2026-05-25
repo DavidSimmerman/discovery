@@ -85,6 +85,9 @@ export function createPlaybackStore(): PlaybackStore {
   let lastShuffleFilterUris: string[] | null = null;
   let played: Set<string> = new Set();
 
+  // Last play payload for no_active_device retry.
+  let lastPlayPayload: Record<string, unknown> | null = null;
+
   async function fetchAccessToken(): Promise<string> {
     const now = Date.now();
     if (cachedToken && cachedToken.expires_at - now > 30_000) return cachedToken.value;
@@ -109,6 +112,7 @@ export function createPlaybackStore(): PlaybackStore {
   }
 
   async function callPlay(payload: Record<string, unknown>): Promise<Response> {
+    lastPlayPayload = payload;
     return fetch('/api/spotify/player/play', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
@@ -158,7 +162,12 @@ export function createPlaybackStore(): PlaybackStore {
         player.addListener('initialization_error', () => { err = 'unsupported'; });
         player.addListener('authentication_error', () => { err = 'auth'; });
         player.addListener('account_error', () => { err = 'premium'; });
-        player.addListener('playback_error', () => { /* per-track toast handled by callers */ });
+        player.addListener('playback_error', () => {
+          err = 'transient';
+          if (mode === 'shuffle') {
+            void player?.nextTrack().catch(() => {});
+          }
+        });
         player.addListener('ready', ({ device_id }) => {
           deviceId = device_id;
           isReady = true;
@@ -180,7 +189,8 @@ export function createPlaybackStore(): PlaybackStore {
           seek: (ms) => void player?.seek(ms),
         });
       } catch {
-        err = 'unsupported';
+        err = err ?? 'unsupported';
+        initPromise = null;
       }
     })();
     return initPromise;
@@ -229,15 +239,20 @@ export function createPlaybackStore(): PlaybackStore {
     handlePlayErrorMaybe(res);
   }
 
-  async function handlePlayErrorMaybe(res: Response): Promise<void> {
+  async function handlePlayErrorMaybe(res: Response, retried = false): Promise<void> {
     if (res.ok) { err = null; return; }
     try {
       const body = await res.json();
       if (body?.error === 'premium_required') err = 'premium';
       else if (body?.error === 'no_active_device') {
-        await callTransfer();
-        // Caller can re-issue play once if they choose; we don't retry implicitly.
-        err = 'transient';
+        if (!retried && lastPlayPayload) {
+          // Retry once after transferring playback to this device (§4.3).
+          await callTransfer();
+          const retry = await callPlay(lastPlayPayload);
+          await handlePlayErrorMaybe(retry, true);
+        } else {
+          err = 'transient';
+        }
       } else if (body?.error === 'rate_limited') err = 'transient';
       else err = 'transient';
     } catch {

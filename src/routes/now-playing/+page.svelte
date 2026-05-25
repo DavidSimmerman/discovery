@@ -165,6 +165,7 @@
       loading={false}
       onrate={handleRate}
     />
+    <!-- scrubber/seek-bar deferred — not in Plan 5 scope -->
     <PremiumGate {product}>
       <Transport store={playback} />
     </PremiumGate>

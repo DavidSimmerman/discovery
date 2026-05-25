@@ -21,13 +21,16 @@
   const subline = $derived([artistText, labelText].filter((s) => s !== '').join(' · '));
 </script>
 
-<button
-  type="button"
+<div
+  role="button"
+  tabindex="0"
+  aria-label={row.title ?? 'Unknown track'}
   data-testid="library-row"
   data-uri={row.uri}
   data-playing={isPlaying ? 'true' : 'false'}
   onclick={() => onclick?.(row.uri)}
-  class="flex w-full items-center gap-3 text-left"
+  onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onclick?.(row.uri); } }}
+  class="flex w-full cursor-pointer items-center gap-3 text-left"
 >
   {#if row.albumArtUrl}
     <img
@@ -52,4 +55,4 @@
     {/if}
     <StarRating value={row.rating ?? 0} size={14} />
   </div>
-</button>
+</div>

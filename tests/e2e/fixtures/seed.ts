@@ -26,7 +26,19 @@ export const TEST_DISPLAY_NAME = 'E2E Test User';
 // A connection dedicated to test setup/teardown. Kept separate from the app's
 // Drizzle client (which relies on $env/static/private, unavailable in the
 // Playwright Node process).
-const sql = postgres(DATABASE_URL, { max: 1 });
+//
+// The connection is created lazily and re-created if it has been closed (e.g.
+// when multiple spec files each call closeSeedConnection() in afterAll — the
+// module singleton would otherwise be permanently ended for subsequent specs
+// that still need it in the same Playwright worker process).
+let _sql: ReturnType<typeof postgres> | null = null;
+
+function getDb(): ReturnType<typeof postgres> {
+  if (!_sql) {
+    _sql = postgres(DATABASE_URL!, { max: 1 });
+  }
+  return _sql;
+}
 
 /** Replicates the app's session signing (see src/lib/server/session.ts). */
 export function signSessionCookieValue(userId: string): string {
@@ -42,6 +54,7 @@ export async function seedTestUser(
   spotifyId: string,
   product: 'premium' | 'free' | 'open' = 'premium',
 ): Promise<void> {
+  const sql = getDb();
   await sql`DELETE FROM users WHERE id = ${userId}`;
   await sql`
     INSERT INTO users (id, spotify_id, display_name, product)
@@ -51,10 +64,12 @@ export async function seedTestUser(
 
 /** Removes the test user; ratings cascade via FK. */
 export async function teardownTestUser(userId: string): Promise<void> {
+  const sql = getDb();
   await sql`DELETE FROM users WHERE id = ${userId}`;
 }
 
 export async function getRating(userId: string, spotifyTrackUri: string): Promise<number | null> {
+  const sql = getDb();
   const rows = await sql<{ rating_half_steps: number }[]>`
     SELECT rating_half_steps FROM ratings
     WHERE user_id = ${userId} AND spotify_track_uri = ${spotifyTrackUri}
@@ -64,6 +79,7 @@ export async function getRating(userId: string, spotifyTrackUri: string): Promis
 
 /** Names of labels applied to a track for the user (track_labels → labels join). */
 export async function getTrackLabels(userId: string, spotifyTrackUri: string): Promise<string[]> {
+  const sql = getDb();
   const rows = await sql<{ name: string }[]>`
     SELECT l.name
     FROM track_labels tl
@@ -79,6 +95,7 @@ export async function getLabelByName(
   userId: string,
   name: string,
 ): Promise<{ id: string; lastUsedAt: Date } | null> {
+  const sql = getDb();
   const rows = await sql<{ id: string; last_used_at: Date }[]>`
     SELECT id, last_used_at FROM labels
     WHERE user_id = ${userId} AND name = ${name}
@@ -126,6 +143,7 @@ export function libraryTrackUris(workerIndex: number): string[] {
  * Designed to exercise search (title/artist/label) and both filters (rating, label).
  */
 export async function seedLibrary(userId: string, workerIndex: number): Promise<void> {
+  const sql = getDb();
   // Dedupe label names per user → name → label id.
   const labelIds = new Map<string, string>();
   const allNames = [...new Set(LIBRARY_FIXTURE.flatMap((t) => t.labels))];
@@ -160,9 +178,13 @@ export async function seedLibrary(userId: string, workerIndex: number): Promise<
 
 /** Deletes the worker's seeded tracks rows (tracks does NOT cascade on user delete). */
 export async function cleanupLibrary(workerIndex: number): Promise<void> {
+  const sql = getDb();
   await sql`DELETE FROM tracks WHERE spotify_track_uri = ANY(${libraryTrackUris(workerIndex)})`;
 }
 
 export async function closeSeedConnection(): Promise<void> {
-  await sql.end({ timeout: 5 });
+  if (_sql) {
+    await _sql.end({ timeout: 5 });
+    _sql = null;
+  }
 }

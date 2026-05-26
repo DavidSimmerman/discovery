@@ -236,19 +236,23 @@
     <NowPlaying {playing} {rating} {loading} onrate={handleRate} />
 
     {#if playing}
+      <!-- Remote-control of Spotify-elsewhere: not behind PremiumGate. Spotify's
+           player API is premium-only and will 402 for free accounts — surfaced
+           via the error banner — but we don't want to pre-disable for users
+           whose `product` field is stale (e.g. upgraded after auth callback). -->
+      <Scrubber
+        positionMs={playing.progressMs ?? 0}
+        durationMs={playing.durationMs}
+        paused={!playing.isPlaying}
+        onseek={(ms) => remoteControl('seek', ms)}
+      />
+      <Transport
+        paused={!playing.isPlaying}
+        ontoggle={() => remoteControl(playing!.isPlaying ? 'pause' : 'resume')}
+        onnext={() => remoteControl('next')}
+        onprev={() => remoteControl('previous')}
+      />
       <PremiumGate {product}>
-        <Scrubber
-          positionMs={playing.progressMs ?? 0}
-          durationMs={playing.durationMs}
-          paused={!playing.isPlaying}
-          onseek={(ms) => remoteControl('seek', ms)}
-        />
-        <Transport
-          paused={!playing.isPlaying}
-          ontoggle={() => remoteControl(playing!.isPlaying ? 'pause' : 'resume')}
-          onnext={() => remoteControl('next')}
-          onprev={() => remoteControl('previous')}
-        />
         <ContinueHereButton
           store={playback}
           contextUri={playing.contextUri ?? null}

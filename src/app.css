@@ -5,3 +5,13 @@
 }
 
 html, body { background: #000; color: #fff; font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Helvetica Neue", sans-serif; overflow-x: hidden; }
+
+/* iOS Safari adds a translucent grey tap-highlight and its own button chrome
+   on top of Tailwind's preflight, which washes out custom button backgrounds
+   (e.g. the white play/pause circle). Force buttons to render exactly what we
+   style them with. */
+button {
+  -webkit-tap-highlight-color: transparent;
+  -webkit-appearance: none;
+  appearance: none;
+}

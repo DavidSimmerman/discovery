@@ -6,8 +6,8 @@
 </script>
 
 {#if gated}
-  <div class="inline-flex flex-col items-center gap-1 opacity-50">
-    <div class="pointer-events-none" aria-disabled="true">
+  <div class="flex w-full flex-col items-center gap-6 opacity-50">
+    <div class="pointer-events-none flex w-full flex-col items-center gap-6" aria-disabled="true">
       {#if children}{@render children()}{/if}
     </div>
     <p class="text-xs text-white/60">Premium required to play in disccovery</p>

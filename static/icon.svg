@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Solid background — works as a maskable icon when the safe area is the center 80%. -->
+  <rect width="512" height="512" rx="96" fill="#000"/>
+  <!-- Spotify-green disc -->
+  <circle cx="256" cy="256" r="180" fill="#1DB954"/>
+  <!-- Star — the rating metaphor the app is built around. Sized to fill ~70% of the disc.
+       Path is the lucide star (24×24 viewBox) translated to its own centre then scaled. -->
+  <g transform="translate(256 256) scale(11) translate(-12 -12)">
+    <path
+      d="M12 2 L15.09 8.26 L22 9.27 L17 14.14 L18.18 21.02 L12 17.77 L5.82 21.02 L7 14.14 L2 9.27 L8.91 8.26 Z"
+      fill="#000"
+    />
+  </g>
+</svg>

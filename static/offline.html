@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>disccovery — offline</title>
+<link rel="icon" type="image/svg+xml" href="/icon.svg" />
+<meta name="theme-color" content="#000000" />
+<style>
+  html, body {
+    background: #000;
+    color: #fff;
+    margin: 0;
+    height: 100%;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Helvetica Neue", sans-serif;
+  }
+  body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 1.5rem;
+    gap: 1rem;
+  }
+  h1 {
+    font-size: 2.25rem;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    margin: 0;
+  }
+  h1 .accent { color: #1DB954; }
+  p { color: rgba(255,255,255,0.7); max-width: 22rem; margin: 0; line-height: 1.5; }
+  button {
+    margin-top: 0.5rem;
+    background: #1DB954;
+    color: #000;
+    border: 0;
+    padding: 0.7rem 1.4rem;
+    border-radius: 9999px;
+    font-weight: 700;
+    font-size: 0.95rem;
+    cursor: pointer;
+  }
+</style>
+</head>
+<body>
+  <h1><span class="accent">disc</span>overy</h1>
+  <p>You're offline. Reconnect to load your library and rate what's playing.</p>
+  <button onclick="location.reload()">Try again</button>
+</body>
+</html>

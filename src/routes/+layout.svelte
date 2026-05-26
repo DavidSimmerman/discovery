@@ -1,7 +1,6 @@
 <script lang="ts">
   import '../app.css';
   import { page } from '$app/state';
-  import favicon from '$lib/assets/favicon.svg';
   import { createPlaybackStore, setPlaybackStore } from '$lib/playback/player.svelte';
   import MiniPlayer from '$lib/components/MiniPlayer.svelte';
   import BottomNav from '$lib/components/BottomNav.svelte';
@@ -22,7 +21,13 @@
 </script>
 
 <svelte:head>
-  <link rel="icon" href={favicon} />
+  <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <meta name="theme-color" content="#000000" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="disccovery" />
 </svelte:head>
 
 {@render children()}

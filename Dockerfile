@@ -5,9 +5,11 @@
 #   build — vite build with static env baked in via build args
 #   run   — slim Node runtime serving build/index.js
 #
-# Migrations are NOT run automatically on container start. Instead, run
-# `pnpm db:migrate:prod` as a Coolify pre-deploy command (one-off container)
-# so a crash-loop restart can't re-trigger them mid-migration.
+# Migrations run automatically on container start via scripts/docker-entrypoint.sh.
+# Drizzle tracks applied migrations in `__drizzle_migrations`, so a restart loop
+# just no-ops on subsequent runs. If a migration fails, the entrypoint exits
+# non-zero before booting adapter-node so we never serve traffic against a
+# half-applied schema.
 
 ARG NODE_VERSION=22
 
@@ -58,6 +60,8 @@ COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/package.json ./
 COPY --from=build /app/drizzle ./drizzle
 COPY --from=build /app/scripts/migrate.mjs ./scripts/migrate.mjs
+COPY --from=build /app/scripts/docker-entrypoint.sh ./scripts/docker-entrypoint.sh
+RUN chmod +x ./scripts/docker-entrypoint.sh
 
 EXPOSE 3000
-CMD ["node", "build/index.js"]
+ENTRYPOINT ["./scripts/docker-entrypoint.sh"]

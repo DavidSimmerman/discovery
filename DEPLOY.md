@@ -40,17 +40,19 @@ at request time.
 Without `ORIGIN` + the `*_HEADER` vars, every POST (rating, label, logout)
 gets rejected as cross-origin once you're behind the tunnel.
 
-## 4. Pre-deploy command
+## 4. Migrations
 
-In Coolify → App → General → **Pre-Deployment Command**, set:
+Migrations run automatically on container start via `scripts/docker-entrypoint.sh`
+— no Coolify pre-deploy command needed. Drizzle tracks applied migrations in
+`__drizzle_migrations`, so restarts are no-ops. A migration failure exits
+non-zero before adapter-node boots, so we never serve traffic against a
+half-applied schema.
+
+To run a migration manually (e.g. from the Coolify Terminal tab), use:
 
 ```
 pnpm db:migrate:prod
 ```
-
-This runs `scripts/migrate.mjs` against `DATABASE_URL` in a one-off container
-before the new app container starts. Safe to re-run — drizzle tracks applied
-migrations.
 
 ## 5. Spotify dashboard
 

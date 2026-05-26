@@ -3,9 +3,7 @@ import type { RequestHandler } from './$types';
 import { fetchCurrentlyPlaying } from '$lib/server/spotify';
 import { getValidAccessToken } from '$lib/server/tokens';
 import { upsertTrack, largestAlbumArtUrl } from '$lib/server/tracks';
-import { db } from '$lib/server/db';
-import { ratings } from '$lib/server/db/schema';
-import { and, eq } from 'drizzle-orm';
+import { findRatingByUriOrIsrc } from '$lib/server/ratings';
 
 const NO_STORE = { headers: { 'cache-control': 'no-store' } };
 
@@ -27,10 +25,7 @@ export const GET: RequestHandler = async ({ locals }) => {
     console.error('failed to upsert currently-playing track', err);
   }
 
-  const [existing] = await db
-    .select()
-    .from(ratings)
-    .where(and(eq(ratings.userId, locals.user.id), eq(ratings.spotifyTrackUri, item.uri)));
+  const existing = await findRatingByUriOrIsrc(locals.user.id, item.uri);
 
   return json(
     {

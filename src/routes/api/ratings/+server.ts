@@ -3,6 +3,7 @@ import type { RequestHandler } from './$types';
 import { db } from '$lib/server/db';
 import { ratings } from '$lib/server/db/schema';
 import { and, eq } from 'drizzle-orm';
+import { findRatingByUriOrIsrc, isrcForUri } from '$lib/server/ratings';
 
 const TRACK_URI_RE = /^spotify:track:[A-Za-z0-9]{22}$/;
 
@@ -11,12 +12,8 @@ export const GET: RequestHandler = async ({ locals, url }) => {
   const uri = url.searchParams.get('uri');
   if (!uri) throw error(400, 'uri required');
   if (!TRACK_URI_RE.test(uri)) throw error(400, 'invalid uri');
-  const row = await db
-    .select({ ratingHalfSteps: ratings.ratingHalfSteps })
-    .from(ratings)
-    .where(and(eq(ratings.userId, locals.user.id), eq(ratings.spotifyTrackUri, uri)))
-    .limit(1);
-  return json({ ratingHalfSteps: row[0]?.ratingHalfSteps ?? null });
+  const found = await findRatingByUriOrIsrc(locals.user.id, uri);
+  return json({ ratingHalfSteps: found?.ratingHalfSteps ?? null });
 };
 
 export const PUT: RequestHandler = async ({ locals, request }) => {
@@ -36,18 +33,36 @@ export const PUT: RequestHandler = async ({ locals, request }) => {
     throw error(400, 'ratingHalfSteps must be an integer between 1 and 10');
   }
 
-  await db
-    .insert(ratings)
-    .values({
+  // Prefer the ISRC the client passed (e.g. from Spotify's currently-playing
+  // payload). Fall back to whatever we have cached in `tracks`, so a rating
+  // started via the Web Playback SDK (which doesn't expose ISRC client-side)
+  // can still dedupe.
+  const effectiveIsrc: string | null =
+    typeof isrc === 'string' && isrc.length > 0 ? isrc : await isrcForUri(spotifyTrackUri);
+
+  // If an existing rating shares this URI, update it. Otherwise, if one shares
+  // the ISRC, update that row in place (keeps the original URI as canonical so
+  // we don't proliferate rows for the same recording).
+  const existing = await findRatingByUriOrIsrc(locals.user.id, spotifyTrackUri);
+
+  if (existing) {
+    await db
+      .update(ratings)
+      .set({ ratingHalfSteps, isrc: effectiveIsrc, ratedAt: new Date() })
+      .where(
+        and(
+          eq(ratings.userId, locals.user.id),
+          eq(ratings.spotifyTrackUri, existing.spotifyTrackUri),
+        ),
+      );
+  } else {
+    await db.insert(ratings).values({
       userId: locals.user.id,
       spotifyTrackUri,
       ratingHalfSteps,
-      isrc: isrc ?? null,
-    })
-    .onConflictDoUpdate({
-      target: [ratings.userId, ratings.spotifyTrackUri],
-      set: { ratingHalfSteps, isrc: isrc ?? null, ratedAt: new Date() },
+      isrc: effectiveIsrc,
     });
+  }
 
   return json({ ok: true, ratingHalfSteps });
 };
@@ -62,9 +77,13 @@ export const DELETE: RequestHandler = async ({ locals, request }) => {
     throw error(400, 'invalid spotifyTrackUri');
   }
 
+  // Delete the canonical row (which may be under a different URI sharing the ISRC).
+  const existing = await findRatingByUriOrIsrc(locals.user.id, spotifyTrackUri);
+  const targetUri = existing?.spotifyTrackUri ?? spotifyTrackUri;
+
   await db
     .delete(ratings)
-    .where(and(eq(ratings.userId, locals.user.id), eq(ratings.spotifyTrackUri, spotifyTrackUri)));
+    .where(and(eq(ratings.userId, locals.user.id), eq(ratings.spotifyTrackUri, targetUri)));
 
   return json({ ok: true });
 };

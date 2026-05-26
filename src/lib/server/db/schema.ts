@@ -9,6 +9,7 @@ import {
   primaryKey,
   check,
   unique,
+  index,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 
@@ -58,6 +59,9 @@ export const ratings = pgTable(
   (table) => [
     primaryKey({ columns: [table.userId, table.spotifyTrackUri] }),
     check('rating_half_steps_range', sql`${table.ratingHalfSteps} between 1 and 10`),
+    // Used to fall back to ISRC when the same recording is encountered under a
+    // different Spotify URI (Smart Shuffle / Autoplay / track relinking).
+    index('ratings_user_isrc_idx').on(table.userId, table.isrc),
   ],
 );
 

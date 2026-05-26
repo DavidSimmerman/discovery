@@ -34,6 +34,7 @@ export async function mockSpotifySdk(page: Page, opts?: { deviceId?: string }): 
       async previousTrack() { (window as unknown as { __mockSpotify: { calls: string[] } }).__mockSpotify.calls.push('previousTrack'); }
       async nextTrack() { (window as unknown as { __mockSpotify: { calls: string[] } }).__mockSpotify.calls.push('nextTrack'); }
       async seek(_ms: number) { (window as unknown as { __mockSpotify: { calls: string[] } }).__mockSpotify.calls.push(`seek:${_ms}`); }
+      async setVolume(_v: number) { (window as unknown as { __mockSpotify: { calls: string[] } }).__mockSpotify.calls.push(`setVolume:${_v}`); }
       async activateElement() {}
     }
     (window as unknown as { Spotify: unknown }).Spotify = { Player: FakePlayer };

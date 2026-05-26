@@ -56,6 +56,8 @@ declare global {
       previousTrack(): Promise<void>;
       nextTrack(): Promise<void>;
       seek(positionMs: number): Promise<void>;
+      setVolume(volume: number): Promise<void>;
+      getVolume(): Promise<number>;
       activateElement(): Promise<void>;
     }
   }

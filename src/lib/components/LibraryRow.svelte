@@ -1,5 +1,5 @@
 <script lang="ts">
-  import StarRating from './StarRating.svelte';
+  import { Star } from '@lucide/svelte';
 
   type Row = {
     uri: string;
@@ -19,6 +19,13 @@
   const artistText = $derived(row.artists.join(', '));
   const labelText = $derived(row.labels.slice(0, 2).join(', '));
   const subline = $derived([artistText, labelText].filter((s) => s !== '').join(' · '));
+
+  // Half-steps (0–10) → display like "5", "4.5". Empty when unrated.
+  const ratingText = $derived(
+    row.rating != null && row.rating > 0
+      ? (row.rating / 2).toString().replace(/\.0$/, '')
+      : null,
+  );
 </script>
 
 <div
@@ -30,29 +37,34 @@
   data-playing={isPlaying ? 'true' : 'false'}
   onclick={() => onclick?.(row.uri)}
   onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onclick?.(row.uri); } }}
-  class="flex w-full cursor-pointer items-center gap-3 text-left"
+  class="flex w-full cursor-pointer items-center gap-3 rounded-xl bg-white/[0.04] p-2 text-left transition-colors hover:bg-white/[0.08]"
 >
   {#if row.albumArtUrl}
     <img
       src={row.albumArtUrl}
       alt=""
-      class="size-11 flex-shrink-0 rounded object-cover"
+      class="size-12 flex-shrink-0 rounded-lg object-cover shadow-lg shadow-black/40"
     />
   {:else}
-    <div class="size-11 flex-shrink-0 rounded bg-white/10" aria-hidden="true"></div>
+    <div class="size-12 flex-shrink-0 rounded-lg bg-white/10 shadow-lg shadow-black/40" aria-hidden="true"></div>
   {/if}
 
   <div class="min-w-0 flex-1">
-    <div class="truncate font-medium {isPlaying ? 'text-spotify-green' : ''}">{row.title ?? 'Unknown track'}</div>
+    <div class="truncate text-sm font-semibold {isPlaying ? 'text-spotify-green' : ''}">{row.title ?? 'Unknown track'}</div>
     {#if subline}
-      <div class="truncate text-xs opacity-60">{subline}</div>
+      <div class="truncate text-xs text-white/50">{subline}</div>
     {/if}
   </div>
 
-  <div class="flex flex-shrink-0 items-center gap-2">
+  <div class="flex flex-shrink-0 items-center gap-1.5">
     {#if isPlaying}
       <span class="text-xs text-spotify-green" aria-label="Now playing">▶</span>
     {/if}
-    <StarRating value={row.rating ?? 0} size={14} />
+    {#if ratingText}
+      <span class="flex items-center gap-0.5 text-spotify-green">
+        <Star class="size-3.5 fill-current" />
+        <span class="text-sm font-bold tabular-nums">{ratingText}</span>
+      </span>
+    {/if}
   </div>
 </div>

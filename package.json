@@ -41,6 +41,7 @@
 		"vitest": "^4.1.6"
 	},
 	"dependencies": {
+		"@lucide/svelte": "^1.16.0",
 		"drizzle-orm": "^0.45.2",
 		"postgres": "^3.4.9"
 	}

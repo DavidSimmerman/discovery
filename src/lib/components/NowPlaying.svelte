@@ -42,17 +42,17 @@
       <img
         src={playing.albumArtUrl}
         alt={playing.album ? `${playing.album} album art` : 'Album art'}
-        class="aspect-square w-64 max-w-full rounded-2xl object-cover shadow-lg"
+        class="aspect-square w-64 max-w-full rounded-2xl object-cover shadow-2xl shadow-black/80"
       />
     {:else}
-      <div class="flex aspect-square w-64 max-w-full items-center justify-center rounded-2xl bg-white/10 text-sm opacity-40">
+      <div class="flex aspect-square w-64 max-w-full items-center justify-center rounded-2xl bg-white/10 text-sm opacity-40 shadow-2xl shadow-black/80">
         No artwork
       </div>
     {/if}
 
     <div class="flex flex-col items-center gap-1">
-      <h2 class="text-2xl font-bold leading-tight">{playing.name}</h2>
-      <p class="text-sm opacity-60">{playing.artists.join(', ')}</p>
+      <h2 class="text-2xl font-extrabold leading-tight">{playing.name}</h2>
+      <p class="text-sm text-white/70">{playing.artists.join(', ')}</p>
     </div>
 
     <StarRating interactive value={rating ?? 0} size={42} onchange={onrate} />

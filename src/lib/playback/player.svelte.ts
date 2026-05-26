@@ -4,6 +4,7 @@
 // $state proxies on `state`, `mode`, `error`, `isReady`, `deviceId`.
 
 import { getContext, setContext } from 'svelte';
+import { browser } from '$app/environment';
 import { loadSpotifySdk } from './sdk-loader';
 import { setMediaActionHandlers, setMediaMetadata, type TrackForMeta } from './media-session';
 import { buildQueueFromClick, shuffleFisherYates } from './queue';
@@ -58,6 +59,11 @@ export interface PlaybackStore {
   next(): Promise<void>;
   prev(): Promise<void>;
   seek(positionMs: number): Promise<void>;
+  setVolume(volume: number): Promise<void>;
+
+  // Volume 0..1; persisted to localStorage so it survives reloads. Set even
+  // before init so the value passed to `new Player({ volume })` reflects it.
+  readonly volume: number;
 
   // Rating bridge (set by the page that knows the current rating)
   setCurrentRating(uri: string, ratingHalfSteps: number | null): void;
@@ -72,6 +78,21 @@ export function createPlaybackStore(): PlaybackStore {
   let err = $state<PlaybackError>(null);
   let isReady = $state(false);
   let deviceId = $state<string | null>(null);
+
+  // Volume 0..1. Read once from localStorage on creation; clamped on every set.
+  const VOLUME_KEY = 'disccovery:volume';
+  function readStoredVolume(): number {
+    if (!browser) return 1;
+    try {
+      const raw = localStorage.getItem(VOLUME_KEY);
+      if (raw === null) return 1;
+      const n = Number(raw);
+      return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 1;
+    } catch {
+      return 1;
+    }
+  }
+  let volume = $state(readStoredVolume());
 
   // Player handle, set on init.
   let player: Spotify.Player | null = null;
@@ -161,7 +182,7 @@ export function createPlaybackStore(): PlaybackStore {
               cb('');
             });
           },
-          volume: 1,
+          volume,
         });
 
         player.addListener('initialization_error', () => { err = 'unsupported'; });
@@ -269,6 +290,16 @@ export function createPlaybackStore(): PlaybackStore {
   async function next(): Promise<void> { await player?.nextTrack(); }
   async function prev(): Promise<void> { await player?.previousTrack(); }
   async function seek(positionMs: number): Promise<void> { await player?.seek(positionMs); }
+  async function setVolume(next: number): Promise<void> {
+    const clamped = Math.max(0, Math.min(1, next));
+    volume = clamped;
+    if (browser) {
+      try { localStorage.setItem(VOLUME_KEY, String(clamped)); } catch { /* quota / private mode */ }
+    }
+    // The SDK may not be initialised yet (user adjusts before pressing play).
+    // The stored value will be picked up by `new Player({ volume })` on init.
+    await player?.setVolume(clamped).catch(() => {});
+  }
 
   function setCurrentRating(uri: string, ratingHalfSteps: number | null): void {
     ratingByUri.set(uri, ratingHalfSteps);
@@ -292,6 +323,8 @@ export function createPlaybackStore(): PlaybackStore {
     init, destroy,
     playTrack, shuffle, takeover,
     togglePlay, next, prev, seek,
+    setVolume,
+    get volume() { return volume; },
     setCurrentRating,
   };
 }

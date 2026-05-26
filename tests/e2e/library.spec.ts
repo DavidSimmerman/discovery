@@ -128,6 +128,36 @@ test('filter by label chip: a top label chip constrains then clears', async ({ p
   await expect(title(page, 'Time')).toBeVisible();
 });
 
+test('tab bar: Labeled hides unlabeled tracks; Rated keeps all (all seeded tracks have ratings)', async ({ page }) => {
+  await page.goto('/library');
+  await expect(title(page, 'Midnight City')).toBeVisible();
+
+  // "Time" has a rating but no labels — should drop under the Labeled tab.
+  await page.getByTestId('library-tab-labeled').click();
+  await expect(title(page, 'Midnight City')).toBeVisible();
+  await expect(title(page, 'Strobe')).toBeVisible();
+  await expect(title(page, 'Levitating')).toBeVisible();
+  await expect(title(page, 'Time')).toHaveCount(0);
+
+  // Rated → all four come back.
+  await page.getByTestId('library-tab-rated').click();
+  await expect(title(page, 'Time')).toBeVisible();
+
+  // All → still four.
+  await page.getByTestId('library-tab-all').click();
+  await expect(title(page, 'Time')).toBeVisible();
+});
+
+test('bottom nav: visible on library, routes to now-playing', async ({ page }) => {
+  await page.goto('/library');
+  const nav = page.getByRole('navigation', { name: 'Primary' });
+  await expect(nav).toBeVisible();
+  await nav.getByRole('link', { name: 'Now Playing' }).click();
+  await expect(page).toHaveURL('/now-playing');
+  // Still present on the destination screen.
+  await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
+});
+
 test('api: /api/library?minRating=8 returns the high-rated rows', async ({ page }) => {
   const res = await page.request.get('/api/library?minRating=8');
   expect(res.ok()).toBe(true);

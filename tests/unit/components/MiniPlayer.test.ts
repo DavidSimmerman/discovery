@@ -27,6 +27,8 @@ function makeStore(active: boolean) {
     next: vi.fn(),
     prev: vi.fn(),
     seek: vi.fn(),
+    setVolume: vi.fn(),
+    volume: 1,
     setCurrentRating: vi.fn(),
     currentRating: null,
   };

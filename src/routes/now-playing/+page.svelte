@@ -4,6 +4,7 @@
   import NowPlaying from '$lib/components/NowPlaying.svelte';
   import LabelChips from '$lib/components/LabelChips.svelte';
   import Transport from '$lib/components/Transport.svelte';
+  import VolumeSlider from '$lib/components/VolumeSlider.svelte';
   import ContinueHereButton from '$lib/components/ContinueHereButton.svelte';
   import ShuffleButton from '$lib/components/ShuffleButton.svelte';
   import PremiumGate from '$lib/components/PremiumGate.svelte';
@@ -137,15 +138,28 @@
       playback.setCurrentRating(uri, j.ratingHalfSteps);
     }).catch(() => {});
   });
+
+  // The currently displayed album art URL — drives the blurred-art backdrop so
+  // the screen shifts colour with the track.
+  const backdropUrl = $derived(
+    playback.isActive && playback.state.track
+      ? (playback.state.track.album.images[0]?.url ?? null)
+      : (playing?.albumArtUrl ?? null),
+  );
 </script>
 
-<main class="relative flex min-h-screen flex-col items-center justify-center gap-6 p-6">
-  <a
-    href="/library"
-    class="absolute right-4 top-4 text-sm text-spotify-green hover:underline"
-  >
-    Library
-  </a>
+<main class="relative flex min-h-screen flex-col items-center justify-center gap-6 p-6 pb-32">
+  <!-- Blurred album-art backdrop — sits behind everything, dimmed to keep text legible.
+       The wrapper clips the scaled/blurred image so we can still scroll the main content. -->
+  {#if backdropUrl}
+    <div aria-hidden="true" class="pointer-events-none absolute inset-0 -z-10 overflow-hidden">
+      <div
+        class="absolute inset-0 scale-110 bg-cover bg-center opacity-50 blur-3xl"
+        style="background-image: url({backdropUrl});"
+      ></div>
+      <div class="absolute inset-0 bg-black/60"></div>
+    </div>
+  {/if}
 
   {#if playback.isActive && playback.state.track}
     <!-- disccovery is the audio source: show SDK state + transport. -->
@@ -168,6 +182,7 @@
     <!-- scrubber/seek-bar deferred — not in Plan 5 scope -->
     <PremiumGate {product}>
       <Transport store={playback} />
+      <VolumeSlider store={playback} />
     </PremiumGate>
     <LabelChips trackUri={playback.state.track.uri} />
   {:else}

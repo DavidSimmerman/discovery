@@ -1,5 +1,6 @@
 <script lang="ts">
   import { tick } from 'svelte';
+  import { Plus } from '@lucide/svelte';
 
   type Label = { id: string; name: string; applied: boolean };
 
@@ -185,7 +186,7 @@
     {#each applied as label (label.id)}
       <button
         type="button"
-        class="inline-flex min-h-8 items-center gap-1 rounded-full bg-spotify-green px-3 py-1 text-sm font-medium text-black"
+        class="inline-flex min-h-8 items-center gap-1 rounded-full bg-spotify-green/25 px-3 py-1 text-xs font-medium text-spotify-green backdrop-blur transition-colors hover:bg-spotify-green/35"
         aria-label={`Remove label ${label.name}`}
         onclick={() => removeLabel(label)}
       >
@@ -197,7 +198,7 @@
     {#each suggestions as label (label.id)}
       <button
         type="button"
-        class="inline-flex min-h-8 items-center rounded-full bg-white/10 px-3 py-1 text-sm text-white/70 transition-colors hover:bg-white/20"
+        class="inline-flex min-h-8 items-center rounded-full bg-white/10 px-3 py-1 text-xs text-white/70 backdrop-blur transition-colors hover:bg-white/20"
         aria-label={`Add label ${label.name}`}
         onclick={() => applyLabel(label.name)}
       >
@@ -208,10 +209,11 @@
     {#if !adding}
       <button
         type="button"
-        class="inline-flex min-h-8 items-center rounded-full border border-white/20 px-3 py-1 text-sm text-white/60 transition-colors hover:border-white/40 hover:text-white/80"
+        aria-label="+ add"
+        class="inline-flex min-h-8 items-center gap-1 rounded-full bg-white/10 px-3 py-1 text-xs text-white/70 backdrop-blur transition-colors hover:bg-white/20"
         onclick={openAdd}
       >
-        + add
+        <Plus class="size-3" />label
       </button>
     {/if}
   </div>

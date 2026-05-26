@@ -1,0 +1,29 @@
+.git
+.github
+.gitignore
+.vscode
+.idea
+
+# Build outputs / caches
+node_modules
+.svelte-kit
+build
+.vite
+
+# Local env (Coolify provides prod values via build args + runtime env)
+.env
+.env.*
+!.env.example
+
+# Tests + reports — not needed in the image
+tests
+playwright-report
+test-results
+coverage
+
+# Mock superpowers / personal scaffolding
+docs/superpowers
+
+# Misc
+*.log
+.DS_Store

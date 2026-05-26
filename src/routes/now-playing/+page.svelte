@@ -4,6 +4,7 @@
   import NowPlaying from '$lib/components/NowPlaying.svelte';
   import LabelChips from '$lib/components/LabelChips.svelte';
   import Transport from '$lib/components/Transport.svelte';
+  import Scrubber from '$lib/components/Scrubber.svelte';
   import VolumeSlider from '$lib/components/VolumeSlider.svelte';
   import ContinueHereButton from '$lib/components/ContinueHereButton.svelte';
   import ShuffleButton from '$lib/components/ShuffleButton.svelte';
@@ -107,6 +108,41 @@
     }
   }
 
+  // Remote control of whichever Spotify device is currently active (when
+  // disccovery isn't the audio source). Optimistically flips local state and
+  // refreshes from the API so the UI doesn't wait for the next 5s poll.
+  async function remoteControl(
+    action: 'pause' | 'resume' | 'next' | 'previous' | 'seek',
+    positionMs?: number,
+  ) {
+    if (!playing) return;
+    const prev = playing;
+    if (action === 'pause') playing = { ...prev, isPlaying: false };
+    else if (action === 'resume') playing = { ...prev, isPlaying: true };
+    else if (action === 'seek' && typeof positionMs === 'number') {
+      playing = { ...prev, progressMs: positionMs };
+    }
+    try {
+      const res = await fetch('/api/spotify/player/control', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action, position_ms: positionMs }),
+      });
+      if (!res.ok) {
+        playing = prev;
+        if (res.status === 402) setError('Premium required to control playback.');
+        else if (res.status === 409) setError('No active Spotify device found.');
+        else setError("Couldn't control Spotify. Try again.");
+        return;
+      }
+      // Give Spotify a moment to apply the action, then re-poll for truth.
+      setTimeout(() => { void poll(); }, 300);
+    } catch {
+      playing = prev;
+      setError("Couldn't reach Spotify. Check your connection.");
+    }
+  }
+
   async function shuffleEverything(): Promise<readonly string[]> {
     const res = await fetch('/api/library?limit=500');
     if (!res.ok) return [];
@@ -179,9 +215,19 @@
       loading={false}
       onrate={handleRate}
     />
-    <!-- scrubber/seek-bar deferred — not in Plan 5 scope -->
     <PremiumGate {product}>
-      <Transport store={playback} />
+      <Scrubber
+        positionMs={playback.state.position_ms}
+        durationMs={playback.state.duration_ms}
+        paused={playback.state.paused}
+        onseek={(ms) => playback.seek(ms)}
+      />
+      <Transport
+        paused={playback.state.paused}
+        ontoggle={() => playback.togglePlay()}
+        onnext={() => playback.next()}
+        onprev={() => playback.prev()}
+      />
       <VolumeSlider store={playback} />
     </PremiumGate>
     <LabelChips trackUri={playback.state.track.uri} />
@@ -191,6 +237,18 @@
 
     {#if playing}
       <PremiumGate {product}>
+        <Scrubber
+          positionMs={playing.progressMs ?? 0}
+          durationMs={playing.durationMs}
+          paused={!playing.isPlaying}
+          onseek={(ms) => remoteControl('seek', ms)}
+        />
+        <Transport
+          paused={!playing.isPlaying}
+          ontoggle={() => remoteControl(playing!.isPlaying ? 'pause' : 'resume')}
+          onnext={() => remoteControl('next')}
+          onprev={() => remoteControl('previous')}
+        />
         <ContinueHereButton
           store={playback}
           contextUri={playing.contextUri ?? null}

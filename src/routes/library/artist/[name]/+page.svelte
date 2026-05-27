@@ -25,7 +25,24 @@
   let loading = $state(true);
   let hasLoaded = $state(false);
   let error = $state<string | null>(null);
-  let sort = $state<Sort>('rating');
+  const SORT_KEY = 'library:artist:sort';
+
+  function loadSort(): Sort {
+    if (typeof sessionStorage === 'undefined') return 'rating';
+    const v = sessionStorage.getItem(SORT_KEY);
+    return v === 'name' || v === 'rating' ? v : 'rating';
+  }
+
+  let sort = $state<Sort>(loadSort());
+
+  $effect(() => {
+    if (typeof sessionStorage === 'undefined') return;
+    try {
+      sessionStorage.setItem(SORT_KEY, sort);
+    } catch {
+      // ignore
+    }
+  });
 
   const playback = getPlaybackStore();
   const product = $derived(page.data.user?.product ?? 'open');
@@ -71,8 +88,7 @@
   }
 
   function onRowClick(uri: string) {
-    const all = rows.map((r) => r.uri);
-    void playback.playTrack(uri, all);
+    void goto(`/library/track/${encodeURIComponent(uri)}`);
   }
 
   async function getCurrentFilterUris(): Promise<readonly string[]> {

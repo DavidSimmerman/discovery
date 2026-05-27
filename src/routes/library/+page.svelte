@@ -55,14 +55,48 @@
   let artistsLoading = $state(false);
   let error = $state<string | null>(null);
 
-  let view = $state<View>('songs');
-  let search = $state('');
-  let minRating = $state<number | null>(null);
-  let activeLabel = $state<string | null>(null);
-  let tab = $state<Tab>('all');
-  let songSort = $state<SongSort>('recency');
-  let artistSort = $state<ArtistSort>('score');
+  type Persisted = {
+    view: View;
+    search: string;
+    minRating: number | null;
+    activeLabel: string | null;
+    tab: Tab;
+    songSort: SongSort;
+    artistSort: ArtistSort;
+  };
+
+  const STORAGE_KEY = 'library:state';
+
+  function loadPersisted(): Partial<Persisted> {
+    if (typeof sessionStorage === 'undefined') return {};
+    try {
+      const raw = sessionStorage.getItem(STORAGE_KEY);
+      return raw ? (JSON.parse(raw) as Partial<Persisted>) : {};
+    } catch {
+      return {};
+    }
+  }
+
+  const persisted = loadPersisted();
+
+  let view = $state<View>(persisted.view ?? 'songs');
+  let search = $state(persisted.search ?? '');
+  let minRating = $state<number | null>(persisted.minRating ?? null);
+  let activeLabel = $state<string | null>(persisted.activeLabel ?? null);
+  let tab = $state<Tab>(persisted.tab ?? 'all');
+  let songSort = $state<SongSort>(persisted.songSort ?? 'recency');
+  let artistSort = $state<ArtistSort>(persisted.artistSort ?? 'score');
   let sortMenuOpen = $state(false);
+
+  $effect(() => {
+    if (typeof sessionStorage === 'undefined') return;
+    const snapshot: Persisted = { view, search, minRating, activeLabel, tab, songSort, artistSort };
+    try {
+      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
+    } catch {
+      // ignore quota / disabled storage
+    }
+  });
 
   let hasLoaded = $state(false);
   let artistsLoaded = $state(false);
@@ -100,8 +134,7 @@
   const product = $derived(page.data.user?.product ?? 'open');
 
   function onRowClick(uri: string) {
-    const all = visibleRows.map((r) => r.uri);
-    void playback.playTrack(uri, all);
+    void goto(`/library/track/${encodeURIComponent(uri)}`);
   }
 
   function onArtistClick(name: string) {
@@ -219,11 +252,11 @@
   }
 
   onMount(() => {
-    // Allow the drill-in back link (?view=artists) to restore the Artists tab.
+    // Back-link query param overrides persisted view (kept for backward compat).
     if (page.url.searchParams.get('view') === 'artists') {
       view = 'artists';
-      void loadArtists();
     }
+    if (view === 'artists') void loadArtists();
     void loadSongs();
     return () => {
       if (searchTimer !== null) clearTimeout(searchTimer);

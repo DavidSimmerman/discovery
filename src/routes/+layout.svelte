@@ -14,9 +14,13 @@
   // Daily refresh of the user's Spotify top artists/tracks. Endpoint is
   // idempotent + checks staleness server-side, so calling on every mount is
   // cheap; if the data is fresh it no-ops.
+  // Start polling Spotify Connect state as soon as the layout mounts for an
+  // authed user — the MiniPlayer needs live state on every in-app screen.
   onMount(() => {
     if (!data.user) return;
+    playback.init();
     void fetch('/api/me/top-lists/refresh', { method: 'POST' }).catch(() => {});
+    return () => playback.destroy();
   });
 
   // Show the persistent nav only on the in-app screens, and only when authed.

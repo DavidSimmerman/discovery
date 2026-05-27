@@ -3,12 +3,12 @@ import type { RequestHandler } from './$types';
 import { getValidAccessToken } from '$lib/server/tokens';
 import { mapSpotifyPlayError } from '$lib/playback/errors';
 
-interface UrisBody { uris: string[]; device_id: string }
+interface UrisBody { uris: string[]; device_id?: string }
 interface ContextBody {
   context_uri: string;
   offset?: { uri: string } | { position: number };
   position_ms?: number;
-  device_id: string;
+  device_id?: string;
 }
 
 type Body = Partial<UrisBody> & Partial<ContextBody>;
@@ -19,8 +19,8 @@ export const PUT: RequestHandler = async ({ locals, request }) => {
   const body = (await request.json()) as Body;
   const hasUris = Array.isArray(body.uris);
   const hasContext = typeof body.context_uri === 'string';
-  if (!body.device_id || (!hasUris && !hasContext)) {
-    throw error(400, 'device_id and one of { uris, context_uri } are required');
+  if (!hasUris && !hasContext) {
+    throw error(400, 'one of { uris, context_uri } is required');
   }
 
   const { access_token } = await getValidAccessToken(locals.user.id);
@@ -33,8 +33,11 @@ export const PUT: RequestHandler = async ({ locals, request }) => {
     if (typeof body.position_ms === 'number') payload.position_ms = body.position_ms;
   }
 
+  // device_id is optional: when absent, Spotify routes to whichever device the
+  // user has marked active. Surfaces no_active_device (409) when nothing is.
+  const qs = body.device_id ? `?device_id=${encodeURIComponent(body.device_id)}` : '';
   const res = await fetch(
-    `https://api.spotify.com/v1/me/player/play?device_id=${encodeURIComponent(body.device_id!)}`,
+    `https://api.spotify.com/v1/me/player/play${qs}`,
     {
       method: 'PUT',
       headers: {

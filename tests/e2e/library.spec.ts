@@ -165,3 +165,46 @@ test('api: /api/library?minRating=8 returns the high-rated rows', async ({ page 
   const titles = data.rows.map((r) => r.title).sort();
   expect(titles).toEqual(['Midnight City', 'Strobe']);
 });
+
+test('sort: rating sort orders songs high → low', async ({ page }) => {
+  await page.goto('/library');
+  await page.waitForLoadState('networkidle');
+  await page.getByTestId('library-sort-button').click();
+  await expect(page.getByTestId('library-sort-rating')).toBeVisible();
+  await page.getByTestId('library-sort-rating').click();
+  await page.waitForLoadState('networkidle');
+  const titles = await page.getByTestId('library-row').allInnerTexts();
+  // Seed ratings: Midnight City 10, Strobe 9, Levitating 6, Time 4
+  expect(titles[0]).toContain('Midnight City');
+  expect(titles[1]).toContain('Strobe');
+  expect(titles[2]).toContain('Levitating');
+  expect(titles[3]).toContain('Time');
+});
+
+test('artists view: lists each seeded artist with their song count', async ({ page }) => {
+  await page.goto('/library');
+  await page.waitForLoadState('networkidle');
+  await page.getByTestId('library-view-artists').click({ force: true });
+  await expect(page.getByTestId('artist-row')).toHaveCount(4);
+});
+
+test('artists drill-in: clicking an artist navigates to that artist\'s songs', async ({ page }) => {
+  await page.goto('/library');
+  await page.waitForLoadState('networkidle');
+  await page.getByTestId('library-view-artists').click({ force: true });
+  await page.getByTestId('artist-row').filter({ hasText: 'M83' }).click({ force: true });
+  await expect(page).toHaveURL(/\/library\/artist\/M83/);
+  await expect(page.getByText('Midnight City', { exact: true })).toBeVisible();
+});
+
+test('api: /api/library/artists returns Bayesian scores for each artist', async ({ page }) => {
+  const res = await page.request.get('/api/library/artists');
+  expect(res.ok()).toBe(true);
+  const data = (await res.json()) as { rows: { name: string; count: number; score: number }[] };
+  expect(data.rows).toHaveLength(4);
+  for (const row of data.rows) {
+    expect(row.count).toBe(1);
+    expect(row.score).toBeGreaterThan(0);
+    expect(row.score).toBeLessThanOrEqual(5);
+  }
+});

@@ -112,4 +112,29 @@ describe('GET /api/library', () => {
       label: 'workout',
     });
   });
+
+  it.each(['recency', 'rating', 'name', 'artist'])('?sort=%s → opts.sort %s', async (s) => {
+    await GET(getEvent({ user: USER, query: { sort: s } }));
+    expect(h.listLibrary).toHaveBeenCalledWith(USER_ID, expect.objectContaining({ sort: s }));
+  });
+
+  it('?sort=bogus → 400; listLibrary not called', async () => {
+    await expect(
+      GET(getEvent({ user: USER, query: { sort: 'bogus' } })),
+    ).rejects.toMatchObject({ status: 400 });
+    expect(h.listLibrary).not.toHaveBeenCalled();
+  });
+
+  it('?artist=Radiohead → opts.artist "Radiohead"', async () => {
+    await GET(getEvent({ user: USER, query: { artist: 'Radiohead' } }));
+    expect(h.listLibrary).toHaveBeenCalledWith(
+      USER_ID,
+      expect.objectContaining({ artist: 'Radiohead' }),
+    );
+  });
+
+  it('?artist= (empty) → treated as absent', async () => {
+    await GET(getEvent({ user: USER, query: { artist: '' } }));
+    expect(h.listLibrary).toHaveBeenCalledWith(USER_ID, {});
+  });
 });

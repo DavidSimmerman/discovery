@@ -1,5 +1,8 @@
 import { db } from '$lib/server/db';
 import { sql } from 'drizzle-orm';
+import { ARTIST_PRIOR_WEIGHT, bayesianScore } from '$lib/server/artist-score';
+
+export type LibrarySort = 'recency' | 'rating' | 'name' | 'artist';
 
 // DB approach: src/lib/server/db/index.ts exports only the Drizzle `db` (the raw
 // postgres-js client is module-private), so these UNION/aggregate queries are
@@ -18,9 +21,15 @@ export type LibraryRow = {
 
 export async function listLibrary(
   userId: string,
-  opts: { search?: string; minRating?: number; label?: string },
+  opts: {
+    search?: string;
+    minRating?: number;
+    label?: string;
+    artist?: string;
+    sort?: LibrarySort;
+  },
 ): Promise<LibraryRow[]> {
-  const { search, minRating, label } = opts;
+  const { search, minRating, label, artist, sort = 'recency' } = opts;
 
   // Optional filters, AND-combined. Each is appended only when present so that
   // absent filters add no constraint. All values are bound parameters.
@@ -36,6 +45,13 @@ export async function listLibrary(
             AND tlf.spotify_track_uri = base.uri
             AND lf.name = ${label}
         )`
+      : sql``;
+
+  // Match the artist by case-insensitive equality on the primary (first) artist name,
+  // which is what the artist list groups by.
+  const artistFilter =
+    artist !== undefined
+      ? sql` AND lower(trim(t.artists[1])) = lower(trim(${artist}))`
       : sql``;
 
   const searchFilter =
@@ -88,9 +104,9 @@ export async function listLibrary(
     LEFT JOIN ratings r ON r.spotify_track_uri = base.uri AND r.user_id = ${userId}
     LEFT JOIN track_labels tl ON tl.spotify_track_uri = base.uri AND tl.user_id = ${userId}
     LEFT JOIN labels l ON l.id = tl.label_id
-    WHERE TRUE${minRatingFilter}${labelFilter}${searchFilter}
+    WHERE TRUE${minRatingFilter}${labelFilter}${artistFilter}${searchFilter}
     GROUP BY base.uri, t.title, t.artists, t.album_art_url, r.rating_half_steps, r.rated_at
-    ORDER BY recency DESC
+    ${orderBy(sort)}
     LIMIT 500
   `);
 
@@ -102,6 +118,82 @@ export async function listLibrary(
     rating: row.rating,
     labels: row.labels,
   }));
+}
+
+function orderBy(sort: LibrarySort) {
+  switch (sort) {
+    case 'rating':
+      return sql`ORDER BY r.rating_half_steps DESC NULLS LAST, recency DESC`;
+    case 'name':
+      return sql`ORDER BY lower(t.title) ASC NULLS LAST, recency DESC`;
+    case 'artist':
+      return sql`ORDER BY lower(t.artists[1]) ASC NULLS LAST, r.rating_half_steps DESC NULLS LAST, lower(t.title) ASC NULLS LAST`;
+    case 'recency':
+    default:
+      return sql`ORDER BY recency DESC`;
+  }
+}
+
+export type ArtistRow = {
+  name: string;
+  count: number;
+  avg: number;
+  score: number;
+};
+
+export async function listArtists(userId: string): Promise<ArtistRow[]> {
+  // Pull every rating + the primary artist name for the rated track.
+  // half_steps is 1..10 (half stars), so rating = half_steps / 2.
+  const rows = await db.execute<{ name: string | null; rating_half_steps: number }>(sql`
+    SELECT
+      t.artists[1] AS name,
+      r.rating_half_steps AS rating_half_steps
+    FROM ratings r
+    JOIN tracks t ON t.spotify_track_uri = r.spotify_track_uri
+    WHERE r.user_id = ${userId}
+      AND t.artists IS NOT NULL
+      AND array_length(t.artists, 1) >= 1
+  `);
+
+  if (rows.length === 0) return [];
+
+  // Aggregate in JS: group by lowercased trimmed name; keep the most common
+  // original spelling as the display name (in practice, Spotify is consistent
+  // enough that any representative works).
+  type Agg = { display: string; ratings: number[] };
+  const groups = new Map<string, Agg>();
+  let totalSum = 0;
+  let totalCount = 0;
+
+  for (const row of rows) {
+    if (!row.name) continue;
+    const key = row.name.trim().toLowerCase();
+    if (key === '') continue;
+    const stars = row.rating_half_steps / 2;
+    totalSum += stars;
+    totalCount += 1;
+    const g = groups.get(key);
+    if (g) {
+      g.ratings.push(stars);
+    } else {
+      groups.set(key, { display: row.name.trim(), ratings: [stars] });
+    }
+  }
+
+  const globalAvg = totalCount === 0 ? 0 : totalSum / totalCount;
+
+  const out: ArtistRow[] = [];
+  for (const { display, ratings: rs } of groups.values()) {
+    const count = rs.length;
+    const sum = rs.reduce((a, b) => a + b, 0);
+    const avg = sum / count;
+    const score = bayesianScore(avg, count, globalAvg, ARTIST_PRIOR_WEIGHT);
+    out.push({ name: display, count, avg, score });
+  }
+
+  // Default order: highest score first.
+  out.sort((a, b) => b.score - a.score || b.count - a.count || a.name.localeCompare(b.name));
+  return out;
 }
 
 export async function libraryFacets(

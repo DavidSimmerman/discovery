@@ -48,11 +48,15 @@ export async function listLibrary(
         )`
       : sql``;
 
-  // Match the artist by case-insensitive equality on the primary (first) artist name,
-  // which is what the artist list groups by.
+  // Match any credited artist (primary OR featured) case-insensitively. Featured
+  // artists land at positions > 1 in t.artists; unnest lets a feature pull the
+  // track onto the featured artist's page too.
   const artistFilter =
     artist !== undefined
-      ? sql` AND lower(trim(t.artists[1])) = lower(trim(${artist}))`
+      ? sql` AND EXISTS (
+          SELECT 1 FROM unnest(t.artists) a
+          WHERE lower(trim(a)) = lower(trim(${artist}))
+        )`
       : sql``;
 
   const searchFilter =
@@ -195,7 +199,8 @@ export type ArtistRow = {
 };
 
 export async function listArtists(userId: string): Promise<ArtistRow[]> {
-  // Pull every rating + the rated track's URI and primary artist name.
+  // One row per (rating, credited artist) — unnest so featured artists get
+  // credited for the track too, not just the primary.
   const rows = await db.execute<{
     uri: string;
     name: string | null;
@@ -203,10 +208,11 @@ export async function listArtists(userId: string): Promise<ArtistRow[]> {
   }>(sql`
     SELECT
       r.spotify_track_uri AS uri,
-      t.artists[1] AS name,
+      a AS name,
       r.rating_stars AS rating_stars
     FROM ratings r
     JOIN tracks t ON t.spotify_track_uri = r.spotify_track_uri
+    CROSS JOIN LATERAL unnest(t.artists) AS a
     WHERE r.user_id = ${userId}
       AND t.artists IS NOT NULL
       AND array_length(t.artists, 1) >= 1

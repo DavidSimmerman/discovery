@@ -70,11 +70,11 @@ export async function teardownTestUser(userId: string): Promise<void> {
 
 export async function getRating(userId: string, spotifyTrackUri: string): Promise<number | null> {
   const sql = getDb();
-  const rows = await sql<{ rating_half_steps: number }[]>`
-    SELECT rating_half_steps FROM ratings
+  const rows = await sql<{ rating_stars: number }[]>`
+    SELECT rating_stars FROM ratings
     WHERE user_id = ${userId} AND spotify_track_uri = ${spotifyTrackUri}
   `;
-  return rows[0]?.rating_half_steps ?? null;
+  return rows[0]?.rating_stars ?? null;
 }
 
 /** Names of labels applied to a track for the user (track_labels → labels join). */
@@ -126,10 +126,10 @@ type LibSeedTrack = {
 };
 
 const LIBRARY_FIXTURE: LibSeedTrack[] = [
-  { slot: 0, title: 'Midnight City', artists: ['M83'], rating: 10, labels: ['night drive', 'synth'] },
-  { slot: 1, title: 'Strobe', artists: ['deadmau5'], rating: 9, labels: ['night drive'] },
-  { slot: 2, title: 'Levitating', artists: ['Dua Lipa'], rating: 6, labels: ['pop'] },
-  { slot: 3, title: 'Time', artists: ['Hans Zimmer'], rating: 4, labels: [] },
+  { slot: 0, title: 'Midnight City', artists: ['M83'], rating: 5, labels: ['night drive', 'synth'] },
+  { slot: 1, title: 'Strobe', artists: ['deadmau5'], rating: 4, labels: ['night drive'] },
+  { slot: 2, title: 'Levitating', artists: ['Dua Lipa'], rating: 3, labels: ['pop'] },
+  { slot: 3, title: 'Time', artists: ['Hans Zimmer'], rating: 2, labels: [] },
 ];
 
 /** URIs this worker seeds — used for teardown of the non-cascading tracks table. */
@@ -164,7 +164,7 @@ export async function seedLibrary(userId: string, workerIndex: number): Promise<
         SET title = EXCLUDED.title, artists = EXCLUDED.artists
     `;
     await sql`
-      INSERT INTO ratings (user_id, spotify_track_uri, rating_half_steps)
+      INSERT INTO ratings (user_id, spotify_track_uri, rating_stars)
       VALUES (${userId}, ${uri}, ${t.rating})
     `;
     for (const name of t.labels) {

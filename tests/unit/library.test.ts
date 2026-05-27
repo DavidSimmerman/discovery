@@ -72,15 +72,15 @@ describe('GET /api/library', () => {
     expect(h.listLibrary).not.toHaveBeenCalled();
   });
 
-  it('?minRating=8 → opts.minRating 8', async () => {
-    await GET(getEvent({ user: USER, query: { minRating: '8' } }));
+  it('?minRating=4 → opts.minRating 4', async () => {
+    await GET(getEvent({ user: USER, query: { minRating: '4' } }));
     expect(h.listLibrary).toHaveBeenCalledWith(
       USER_ID,
-      expect.objectContaining({ minRating: 8 }),
+      expect.objectContaining({ minRating: 4 }),
     );
   });
 
-  it.each(['0', '11', 'abc', '3.5'])('?minRating=%s → 400; listLibrary not called', async (v) => {
+  it.each(['0', '6', 'abc', '3.5'])('?minRating=%s → 400; listLibrary not called', async (v) => {
     await expect(
       GET(getEvent({ user: USER, query: { minRating: v } })),
     ).rejects.toMatchObject({ status: 400 });
@@ -104,11 +104,11 @@ describe('GET /api/library', () => {
 
   it('combined search + minRating + label → full opts', async () => {
     await GET(
-      getEvent({ user: USER, query: { search: 'foo', minRating: '8', label: 'workout' } }),
+      getEvent({ user: USER, query: { search: 'foo', minRating: '4', label: 'workout' } }),
     );
     expect(h.listLibrary).toHaveBeenCalledWith(USER_ID, {
       search: 'foo',
-      minRating: 8,
+      minRating: 4,
       label: 'workout',
     });
   });

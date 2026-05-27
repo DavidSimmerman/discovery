@@ -6,15 +6,11 @@ describe('stars()', () => {
     expect(stars(null)).toBe('');
     expect(stars(0)).toBe('');
   });
-  it('renders integer ratings as integer + ★', () => {
-    expect(stars(2)).toBe('1★');
-    expect(stars(4)).toBe('2★');
-    expect(stars(10)).toBe('5★');
-  });
-  it('renders half ratings as one-decimal + ★', () => {
-    expect(stars(1)).toBe('0.5★');
-    expect(stars(3)).toBe('1.5★');
-    expect(stars(5)).toBe('2.5★');
-    expect(stars(9)).toBe('4.5★');
+  it('renders whole-star ratings as integer + ★', () => {
+    expect(stars(1)).toBe('1★');
+    expect(stars(2)).toBe('2★');
+    expect(stars(3)).toBe('3★');
+    expect(stars(4)).toBe('4★');
+    expect(stars(5)).toBe('5★');
   });
 });

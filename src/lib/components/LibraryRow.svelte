@@ -20,11 +20,9 @@
   const labelText = $derived(row.labels.slice(0, 2).join(', '));
   const subline = $derived([artistText, labelText].filter((s) => s !== '').join(' · '));
 
-  // Half-steps (0–10) → display like "5", "4.5". Empty when unrated.
+  // Whole stars (0–5). Empty when unrated.
   const ratingText = $derived(
-    row.rating != null && row.rating > 0
-      ? (row.rating / 2).toString().replace(/\.0$/, '')
-      : null,
+    row.rating != null && row.rating > 0 ? row.rating.toString() : null,
   );
 </script>
 

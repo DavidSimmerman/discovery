@@ -46,8 +46,8 @@ async function countRatings(userId: string): Promise<number> {
 }
 
 async function listRatings(userId: string) {
-  return sql<{ spotify_track_uri: string; rating_half_steps: number; isrc: string | null }[]>`
-    SELECT spotify_track_uri, rating_half_steps, isrc FROM ratings WHERE user_id = ${userId}
+  return sql<{ spotify_track_uri: string; rating_stars: number; isrc: string | null }[]>`
+    SELECT spotify_track_uri, rating_stars, isrc FROM ratings WHERE user_id = ${userId}
   `;
 }
 
@@ -83,7 +83,7 @@ test('rating two URIs with the same ISRC leaves exactly one row, with the latest
 
   // First rating under URI_A.
   let res = await page.request.put('/api/ratings', {
-    data: { spotifyTrackUri: URI_A, ratingHalfSteps: 6, isrc: SHARED_ISRC },
+    data: { spotifyTrackUri: URI_A, ratingStars: 3, isrc: SHARED_ISRC },
   });
   expect(res.status()).toBe(200);
   expect(await countRatings(userId)).toBe(1);
@@ -92,13 +92,13 @@ test('rating two URIs with the same ISRC leaves exactly one row, with the latest
   // Shuffle / relinking). The server must update the existing row instead of
   // inserting a second one.
   res = await page.request.put('/api/ratings', {
-    data: { spotifyTrackUri: URI_B, ratingHalfSteps: 9, isrc: SHARED_ISRC },
+    data: { spotifyTrackUri: URI_B, ratingStars: 4, isrc: SHARED_ISRC },
   });
   expect(res.status()).toBe(200);
 
   const rows = await listRatings(userId);
   expect(rows).toHaveLength(1);
-  expect(rows[0].rating_half_steps).toBe(9);
+  expect(rows[0].rating_stars).toBe(4);
   // The canonical row should still be URI_A (first to be rated).
   expect(rows[0].spotify_track_uri).toBe(URI_A);
 });
@@ -107,12 +107,12 @@ test('GET /api/ratings resolves via ISRC when looking up a duplicate URI', async
   // Rate URI_A, then look up URI_B by URI alone — server must return the rating
   // via ISRC fallback.
   let res = await page.request.put('/api/ratings', {
-    data: { spotifyTrackUri: URI_A, ratingHalfSteps: 7, isrc: SHARED_ISRC },
+    data: { spotifyTrackUri: URI_A, ratingStars: 4, isrc: SHARED_ISRC },
   });
   expect(res.status()).toBe(200);
 
   res = await page.request.get(`/api/ratings?uri=${encodeURIComponent(URI_B)}`);
   expect(res.status()).toBe(200);
   const body = await res.json();
-  expect(body).toEqual({ ratingHalfSteps: 7 });
+  expect(body).toEqual({ ratingStars: 4 });
 });

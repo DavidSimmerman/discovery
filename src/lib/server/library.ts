@@ -1,6 +1,6 @@
 import { db } from '$lib/server/db';
 import { sql } from 'drizzle-orm';
-import { ARTIST_PRIOR_WEIGHT, bayesianScore } from '$lib/server/artist-score';
+import { artistScore } from '$lib/server/artist-score';
 
 export type LibrarySort = 'recency' | 'rating' | 'name' | 'artist';
 
@@ -34,7 +34,7 @@ export async function listLibrary(
   // Optional filters, AND-combined. Each is appended only when present so that
   // absent filters add no constraint. All values are bound parameters.
   const minRatingFilter =
-    minRating !== undefined ? sql` AND r.rating_half_steps >= ${minRating}` : sql``;
+    minRating !== undefined ? sql` AND r.rating_stars >= ${minRating}` : sql``;
 
   const labelFilter =
     label !== undefined
@@ -90,7 +90,7 @@ export async function listLibrary(
       t.title AS title,
       t.artists AS artists,
       t.album_art_url AS album_art_url,
-      r.rating_half_steps AS rating,
+      r.rating_stars AS rating,
       COALESCE(
         array_agg(l.name) FILTER (WHERE l.name IS NOT NULL),
         ARRAY[]::text[]
@@ -105,7 +105,7 @@ export async function listLibrary(
     LEFT JOIN track_labels tl ON tl.spotify_track_uri = base.uri AND tl.user_id = ${userId}
     LEFT JOIN labels l ON l.id = tl.label_id
     WHERE TRUE${minRatingFilter}${labelFilter}${artistFilter}${searchFilter}
-    GROUP BY base.uri, t.title, t.artists, t.album_art_url, r.rating_half_steps, r.rated_at
+    GROUP BY base.uri, t.title, t.artists, t.album_art_url, r.rating_stars, r.rated_at
     ${orderBy(sort)}
     LIMIT 500
   `);
@@ -123,11 +123,11 @@ export async function listLibrary(
 function orderBy(sort: LibrarySort) {
   switch (sort) {
     case 'rating':
-      return sql`ORDER BY r.rating_half_steps DESC NULLS LAST, recency DESC`;
+      return sql`ORDER BY r.rating_stars DESC NULLS LAST, recency DESC`;
     case 'name':
       return sql`ORDER BY lower(t.title) ASC NULLS LAST, recency DESC`;
     case 'artist':
-      return sql`ORDER BY lower(t.artists[1]) ASC NULLS LAST, r.rating_half_steps DESC NULLS LAST, lower(t.title) ASC NULLS LAST`;
+      return sql`ORDER BY lower(t.artists[1]) ASC NULLS LAST, r.rating_stars DESC NULLS LAST, lower(t.title) ASC NULLS LAST`;
     case 'recency':
     default:
       return sql`ORDER BY recency DESC`;
@@ -143,11 +143,10 @@ export type ArtistRow = {
 
 export async function listArtists(userId: string): Promise<ArtistRow[]> {
   // Pull every rating + the primary artist name for the rated track.
-  // half_steps is 1..10 (half stars), so rating = half_steps / 2.
-  const rows = await db.execute<{ name: string | null; rating_half_steps: number }>(sql`
+  const rows = await db.execute<{ name: string | null; rating_stars: number }>(sql`
     SELECT
       t.artists[1] AS name,
-      r.rating_half_steps AS rating_half_steps
+      r.rating_stars AS rating_stars
     FROM ratings r
     JOIN tracks t ON t.spotify_track_uri = r.spotify_track_uri
     WHERE r.user_id = ${userId}
@@ -162,32 +161,25 @@ export async function listArtists(userId: string): Promise<ArtistRow[]> {
   // enough that any representative works).
   type Agg = { display: string; ratings: number[] };
   const groups = new Map<string, Agg>();
-  let totalSum = 0;
-  let totalCount = 0;
 
   for (const row of rows) {
     if (!row.name) continue;
     const key = row.name.trim().toLowerCase();
     if (key === '') continue;
-    const stars = row.rating_half_steps / 2;
-    totalSum += stars;
-    totalCount += 1;
     const g = groups.get(key);
     if (g) {
-      g.ratings.push(stars);
+      g.ratings.push(row.rating_stars);
     } else {
-      groups.set(key, { display: row.name.trim(), ratings: [stars] });
+      groups.set(key, { display: row.name.trim(), ratings: [row.rating_stars] });
     }
   }
-
-  const globalAvg = totalCount === 0 ? 0 : totalSum / totalCount;
 
   const out: ArtistRow[] = [];
   for (const { display, ratings: rs } of groups.values()) {
     const count = rs.length;
     const sum = rs.reduce((a, b) => a + b, 0);
     const avg = sum / count;
-    const score = bayesianScore(avg, count, globalAvg, ARTIST_PRIOR_WEIGHT);
+    const score = artistScore(rs);
     out.push({ name: display, count, avg, score });
   }
 

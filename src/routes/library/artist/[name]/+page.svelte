@@ -34,8 +34,8 @@
     const rated = rows.filter((r) => r.rating != null && r.rating > 0);
     const total = rated.length;
     if (total === 0) return { total: 0, avg: 0, fiveStars: 0 };
-    const sum = rated.reduce((a, r) => a + (r.rating ?? 0) / 2, 0);
-    const fiveStars = rated.filter((r) => r.rating === 10).length;
+    const sum = rated.reduce((a, r) => a + (r.rating ?? 0), 0);
+    const fiveStars = rated.filter((r) => r.rating === 5).length;
     return { total, avg: sum / total, fiveStars };
   });
 

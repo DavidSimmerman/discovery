@@ -36,12 +36,12 @@ test.afterAll(async () => {
   await closeSeedConnection();
 });
 
-test('mediaSession title is "4★ Track Name" when rated 8 half-steps', async ({ page }) => {
+test('mediaSession title is "4★ Track Name" when rated 4 stars', async ({ page }) => {
   await page.route('**/api/spotify/player/transfer', (r) => r.fulfill({ status: 204 }));
   await page.route('**/api/spotify/player/play', (r) => r.fulfill({ status: 204 }));
   // Pre-stage the rating fetch the now-playing page does on track change.
   await page.route('**/api/ratings?uri=*', (r) =>
-    r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ratingHalfSteps: 8 }) }),
+    r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ratingStars: 4 }) }),
   );
 
   await page.goto('/now-playing');

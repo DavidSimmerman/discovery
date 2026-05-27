@@ -1,14 +1,10 @@
 <script lang="ts">
   type Props = {
-    fill: 'empty' | 'half' | 'full';
+    fill: 'empty' | 'full';
     size: number;
   };
 
   let { fill, size }: Props = $props();
-
-  // Unique id so multiple stars' clipPaths don't collide on one page.
-  const uid = $props.id();
-  const clipId = `star-half-${uid}`;
 
   const FILLED = '#1DB954';
   const EMPTY_STROKE = '#444';
@@ -27,13 +23,6 @@
   aria-hidden="true"
   style="display:block"
 >
-  {#if fill === 'half'}
-    <clipPath id={clipId}>
-      <rect x="0" y="0" width="12" height="24" />
-    </clipPath>
-  {/if}
-
-  <!-- Base: empty star (outline). -->
   <path
     d={STAR_PATH}
     fill={fill === 'full' ? FILLED : 'none'}
@@ -41,16 +30,4 @@
     stroke-width="1.5"
     stroke-linejoin="round"
   />
-
-  {#if fill === 'half'}
-    <!-- Filled left half overlaid and clipped to 50% width. -->
-    <path
-      d={STAR_PATH}
-      fill={FILLED}
-      stroke={FILLED}
-      stroke-width="1.5"
-      stroke-linejoin="round"
-      clip-path={`url(#${clipId})`}
-    />
-  {/if}
 </svg>

@@ -27,8 +27,8 @@ export const GET: RequestHandler = async ({ locals, url }) => {
   const rawMinRating = url.searchParams.get('minRating');
   if (rawMinRating !== null && rawMinRating.length > 0) {
     const minRating = Number(rawMinRating);
-    if (!Number.isInteger(minRating) || minRating < 1 || minRating > 10) {
-      throw error(400, 'minRating must be an integer between 1 and 10');
+    if (!Number.isInteger(minRating) || minRating < 1 || minRating > 5) {
+      throw error(400, 'minRating must be an integer between 1 and 5');
     }
     opts.minRating = minRating;
   }

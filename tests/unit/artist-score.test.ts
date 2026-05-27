@@ -1,39 +1,66 @@
 import { describe, it, expect } from 'vitest';
-import { bayesianScore } from '../../src/lib/server/artist-score';
+import { artistScore } from '../../src/lib/server/artist-score';
 
-describe('bayesianScore', () => {
-  it('with n=0 → returns the global average', () => {
-    expect(bayesianScore(0, 0, 3.0, 5)).toBeCloseTo(3.0);
+describe('artistScore — hit-driven targets', () => {
+  it('10 × 5★ → at least 4.95', () => {
+    expect(artistScore(Array(10).fill(5))).toBeGreaterThanOrEqual(4.95);
   });
 
-  it('with infinite m would equal globalAvg; with m=0 equals artistAvg', () => {
-    expect(bayesianScore(5.0, 10, 3.0, 0)).toBeCloseTo(5.0);
+  it('15+ × 5★ → essentially 5.0', () => {
+    expect(artistScore(Array(15).fill(5))).toBeGreaterThanOrEqual(4.99);
   });
 
-  it('single 5★ rating ranks BELOW a prolific 3.5★ artist (the user\'s example)', () => {
-    const single = bayesianScore(5.0, 1, 3.0, 5);
-    const prolific = bayesianScore(3.5, 30, 3.0, 5);
-    expect(prolific).toBeGreaterThan(single);
+  it('1 × 5★ → not too high (low-volume pull)', () => {
+    const s = artistScore([5]);
+    expect(s).toBeGreaterThan(3);
+    expect(s).toBeLessThan(3.9);
   });
 
-  it('artist with sustained high ratings beats both', () => {
-    const single = bayesianScore(5.0, 1, 3.0, 5);
-    const prolific = bayesianScore(3.5, 30, 3.0, 5);
-    const sustained = bayesianScore(5.0, 30, 3.0, 5);
-    expect(sustained).toBeGreaterThan(prolific);
-    expect(sustained).toBeGreaterThan(single);
+  it('3 × 5★ → ~4.4 (decent but small sample)', () => {
+    const s = artistScore([5, 5, 5]);
+    expect(s).toBeGreaterThan(4);
+    expect(s).toBeLessThan(4.6);
   });
 
-  it('larger m makes small samples shrink harder toward global mean', () => {
-    const m5 = bayesianScore(5.0, 1, 3.0, 5);
-    const m20 = bayesianScore(5.0, 1, 3.0, 20);
-    expect(m20).toBeLessThan(m5);
-    expect(m20).toBeGreaterThan(3.0); // still pulled up by the 5★
+  it('no hits → neutral (3)', () => {
+    expect(artistScore([])).toBe(3);
+    expect(artistScore([1, 2, 2.5])).toBe(3);
+    expect(artistScore(Array(30).fill(2))).toBe(3);
+  });
+});
+
+describe('artistScore — misses are ignored', () => {
+  it('hits + misses scores identically to hits alone', () => {
+    const justHits = artistScore([5, 5, 5]);
+    const withMisses = artistScore([5, 5, 5, 0.5, 0.5, 1, 2]);
+    expect(withMisses).toBeCloseTo(justHits, 6);
   });
 
-  it('two artists with identical avg but different volumes — higher volume wins', () => {
-    const a = bayesianScore(4.0, 3, 3.0, 5);
-    const b = bayesianScore(4.0, 30, 3.0, 5);
+  it('30 songs with 10 hits matches 10 hits alone (the 20 misses are invisible)', () => {
+    const withMisses = artistScore([...Array(10).fill(5), ...Array(20).fill(2)]);
+    const justHits = artistScore(Array(10).fill(5));
+    expect(withMisses).toBeCloseTo(justHits, 6);
+  });
+});
+
+describe('artistScore — ordering invariants', () => {
+  it('deep catalog of hits beats a one-hit-wonder', () => {
+    expect(artistScore(Array(20).fill(5))).toBeGreaterThan(artistScore([5]));
+  });
+
+  it('volume monotonicity: more hits → higher score', () => {
+    const a = artistScore([5]);
+    const b = artistScore([5, 5, 5]);
+    const c = artistScore(Array(10).fill(5));
+    const d = artistScore(Array(20).fill(5));
     expect(b).toBeGreaterThan(a);
+    expect(c).toBeGreaterThan(b);
+    expect(d).toBeGreaterThan(c);
+  });
+
+  it('quality of hits matters: 5★ hits score above 3★ hits at same volume', () => {
+    const fives = artistScore(Array(5).fill(5));
+    const threes = artistScore(Array(5).fill(3));
+    expect(fives).toBeGreaterThan(threes);
   });
 });

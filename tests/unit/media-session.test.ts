@@ -33,10 +33,10 @@ beforeEach(() => {
 });
 
 describe('setMediaMetadata', () => {
-  it('formats title as "4★ Track" when rated 8 half-steps', () => {
+  it('formats title as "4★ Track" when rated 4 stars', () => {
     setMediaMetadata(
       { uri: 'spotify:track:x', name: 'Hello', artists: [{ name: 'Adele' }], album: { name: 'XL', images: [] } },
-      8,
+      4,
     );
     const m = navigator.mediaSession.metadata as unknown as MM;
     expect(m.title).toBe('4★ Hello');

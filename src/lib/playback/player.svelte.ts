@@ -66,7 +66,7 @@ export interface PlaybackStore {
   readonly volume: number;
 
   // Rating bridge (set by the page that knows the current rating)
-  setCurrentRating(uri: string, ratingHalfSteps: number | null): void;
+  setCurrentRating(uri: string, ratingStars: number | null): void;
 
   // Current track's rating (reactive via ratingTrigger)
   readonly currentRating: number | null;
@@ -301,10 +301,10 @@ export function createPlaybackStore(): PlaybackStore {
     await player?.setVolume(clamped).catch(() => {});
   }
 
-  function setCurrentRating(uri: string, ratingHalfSteps: number | null): void {
-    ratingByUri.set(uri, ratingHalfSteps);
+  function setCurrentRating(uri: string, ratingStars: number | null): void {
+    ratingByUri.set(uri, ratingStars);
     ratingTrigger++;
-    if (state.track?.uri === uri) setMediaMetadata(state.track, ratingHalfSteps);
+    if (state.track?.uri === uri) setMediaMetadata(state.track, ratingStars);
   }
 
   return {

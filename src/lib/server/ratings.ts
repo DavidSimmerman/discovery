@@ -17,7 +17,7 @@ import { and, eq } from 'drizzle-orm';
 
 export type FoundRating = {
   spotifyTrackUri: string;
-  ratingHalfSteps: number;
+  ratingStars: number;
 };
 
 export async function findRatingByUriOrIsrc(
@@ -27,7 +27,7 @@ export async function findRatingByUriOrIsrc(
   const direct = await db
     .select({
       spotifyTrackUri: ratings.spotifyTrackUri,
-      ratingHalfSteps: ratings.ratingHalfSteps,
+      ratingStars: ratings.ratingStars,
     })
     .from(ratings)
     .where(and(eq(ratings.userId, userId), eq(ratings.spotifyTrackUri, uri)))
@@ -45,7 +45,7 @@ export async function findRatingByUriOrIsrc(
   const viaIsrc = await db
     .select({
       spotifyTrackUri: ratings.spotifyTrackUri,
-      ratingHalfSteps: ratings.ratingHalfSteps,
+      ratingStars: ratings.ratingStars,
     })
     .from(ratings)
     .where(and(eq(ratings.userId, userId), eq(ratings.isrc, isrc)))

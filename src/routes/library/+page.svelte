@@ -343,11 +343,11 @@
     <div class="-mx-1 flex flex-wrap gap-2 px-1">
       <button
         type="button"
-        aria-pressed={minRating === 10}
+        aria-pressed={minRating === 5}
         aria-label="★★★★★"
-        onclick={() => toggleRating(10)}
+        onclick={() => toggleRating(5)}
         class="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-3 py-1 text-xs transition-colors focus:outline-none {minRating ===
-        10
+        5
           ? 'bg-spotify-green font-semibold text-black shadow shadow-spotify-green/40'
           : 'bg-white/10 text-white/70 backdrop-blur hover:bg-white/20'}"
       >
@@ -355,11 +355,11 @@
       </button>
       <button
         type="button"
-        aria-pressed={minRating === 8}
+        aria-pressed={minRating === 4}
         aria-label="★★★★+"
-        onclick={() => toggleRating(8)}
+        onclick={() => toggleRating(4)}
         class="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-3 py-1 text-xs transition-colors focus:outline-none {minRating ===
-        8
+        4
           ? 'bg-spotify-green font-semibold text-black shadow shadow-spotify-green/40'
           : 'bg-white/10 text-white/70 backdrop-blur hover:bg-white/20'}"
       >

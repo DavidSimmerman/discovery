@@ -41,7 +41,7 @@ export const GET: RequestHandler = async ({ locals }) => {
         isrc: item.external_ids?.isrc ?? null,
         contextUri: result.context?.uri ?? null,
       },
-      rating: existing?.ratingHalfSteps ?? null,
+      rating: existing?.ratingStars ?? null,
     },
     NO_STORE,
   );

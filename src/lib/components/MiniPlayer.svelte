@@ -13,10 +13,9 @@
   // Sit above the bottom nav (h-12 + bottom-4 + gap) when it's visible.
   const bottomClass = $derived(navVisible ? 'bottom-20' : 'bottom-4');
 
-  // Rating is stored in half-steps (0–10). Show like "4" or "4.5".
   const ratingLabel = $derived(
     store.currentRating != null && store.currentRating > 0
-      ? (store.currentRating / 2).toString().replace(/\.0$/, '')
+      ? store.currentRating.toString()
       : null,
   );
 </script>

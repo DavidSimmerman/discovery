@@ -1,81 +1,98 @@
 import { describe, it, expect } from 'vitest';
 import { sameSong, groupSongs, type Groupable } from '$lib/song-group';
+import { canonicalTitle } from '$lib/song-canonical';
 
 function mk(
   uri: string,
-  family: string | null,
-  canonical: string | null,
-  primary: string | null = 'artist-1',
+  title: string | null,
+  family: string | null = null,
+  canonical: string | null = null,
 ): Groupable {
-  return { uri, songFamilyId: family, canonicalTitle: canonical, primaryArtistId: primary };
+  return { uri, title, songFamilyId: family, canonicalTitle: canonical };
 }
 
 describe('sameSong', () => {
   it('matches on shared songFamilyId', () => {
-    expect(sameSong(mk('a', 'fam-1', 'love story'), mk('b', 'fam-1', 'love story'))).toBe(true);
+    expect(sameSong(mk('a', 'Love Story', 'fam-1'), mk('b', 'Love Story (TV)', 'fam-1'))).toBe(true);
   });
 
-  it('does not match when family ids differ and canonicals differ', () => {
-    expect(sameSong(mk('a', 'fam-1', 'love story'), mk('b', 'fam-2', 'blank space'))).toBe(false);
+  it('does not match when canonicals differ and no shared family', () => {
+    expect(sameSong(mk('a', 'Love Story'), mk('b', 'Blank Space'))).toBe(false);
   });
 
-  it('falls back to canonical equality when family id missing', () => {
-    expect(sameSong(mk('a', null, 'love story'), mk('b', null, 'love story'))).toBe(true);
+  it('matches by runtime-canonicalized title when family id missing', () => {
+    expect(sameSong(mk('a', 'Hurt (Acoustic)'), mk('b', 'Hurt'))).toBe(true);
   });
 
-  it('matches when shorter canonical is a word-bounded substring of longer', () => {
-    // Normalization missed a weird tag, but base title is contained.
+  it('matches collab variants on either side of a "(with X)" suffix', () => {
     expect(
-      sameSong(mk('a', 'fam-1', 'wonderwall'), mk('b', 'fam-2', 'wonderwall demo unreleased')),
+      sameSong(mk('a', 'Calling All Angels (with Quinn XCII)'), mk('b', 'Calling All Angels')),
+    ).toBe(true);
+    expect(
+      sameSong(
+        mk('a', 'Calling All Angels (with Quinn XCII)'),
+        mk('b', 'Calling All Angels (with Chelsea Cutler)'),
+      ),
+    ).toBe(true);
+  });
+
+  it('strips "- Live from X" dash suffix', () => {
+    expect(sameSong(mk('a', 'Candle'), mk('b', 'Candle - Live from Red Rocks'))).toBe(true);
+  });
+
+  it('matches when one canonical is a word-bounded substring of another', () => {
+    // If runtime canonicalization happens to leave extra tokens, substring catches it.
+    expect(
+      sameSong(
+        mk('a', null, null, 'wonderwall'),
+        mk('b', null, null, 'wonderwall unreleased session'),
+      ),
     ).toBe(true);
   });
 
   it('does not match very short canonicals as substrings', () => {
-    expect(sameSong(mk('a', 'fam-1', 'a'), mk('b', 'fam-2', 'alphabet song'))).toBe(false);
-    expect(sameSong(mk('a', 'fam-1', 'no'), mk('b', 'fam-2', 'no diggity'))).toBe(false);
+    expect(sameSong(mk('a', null, null, 'a'), mk('b', null, null, 'alphabet song'))).toBe(false);
+    expect(sameSong(mk('a', null, null, 'no'), mk('b', null, null, 'no diggity'))).toBe(false);
   });
 
   it('requires word boundary, not raw substring', () => {
-    // "love" should not match "loveliness" — not a word-bounded match.
-    expect(sameSong(mk('a', 'fam-1', 'love'), mk('b', 'fam-2', 'loveliness'))).toBe(false);
-    // But "love" does match "love story".
-    expect(sameSong(mk('a', 'fam-1', 'love'), mk('b', 'fam-2', 'love story'))).toBe(true);
-  });
-
-  it('requires the same primary artist for substring fallback', () => {
-    expect(
-      sameSong(
-        mk('a', null, 'wonderwall', 'oasis'),
-        mk('b', null, 'wonderwall acoustic cover', 'ryan-adams'),
-      ),
-    ).toBe(false);
-  });
-
-  it('does not match when primary artist is missing', () => {
-    expect(sameSong(mk('a', null, 'song', null), mk('b', null, 'song', null))).toBe(false);
+    expect(sameSong(mk('a', null, null, 'love'), mk('b', null, null, 'loveliness'))).toBe(false);
+    expect(sameSong(mk('a', null, null, 'love'), mk('b', null, null, 'love story'))).toBe(true);
   });
 });
 
 describe('groupSongs', () => {
-  it('groups versions together and keeps singletons separate', () => {
+  it('groups versions and collab variants together', () => {
     const tracks = [
-      mk('uri:1', 'fam-1', 'love story'),
-      mk('uri:2', 'fam-1', 'love story'), // taylor's version, same family
-      mk('uri:3', 'fam-2', 'blank space'),
-      mk('uri:4', null, 'love story extra tag'), // substring fallback
+      mk('uri:1', 'Calling All Angels (with Quinn XCII)'),
+      mk('uri:2', 'Calling All Angels (with Chelsea Cutler)'),
+      mk('uri:3', 'Candle'),
+      mk('uri:4', 'Candle - Live from Red Rocks'),
+      mk('uri:5', 'Some Other Song'),
     ];
     const groups = groupSongs(tracks);
-    expect(groups).toHaveLength(2);
-    expect(groups[0].map((t) => t.uri).sort()).toEqual(['uri:1', 'uri:2', 'uri:4']);
-    expect(groups[1].map((t) => t.uri)).toEqual(['uri:3']);
+    expect(groups).toHaveLength(3);
+    expect(groups[0].map((t) => t.uri).sort()).toEqual(['uri:1', 'uri:2']);
+    expect(groups[1].map((t) => t.uri).sort()).toEqual(['uri:3', 'uri:4']);
+    expect(groups[2].map((t) => t.uri)).toEqual(['uri:5']);
   });
 
   it('returns each track in its own group when nothing matches', () => {
-    const tracks = [
-      mk('uri:1', 'fam-1', 'a'),
-      mk('uri:2', 'fam-2', 'b'),
-      mk('uri:3', 'fam-3', 'c'),
-    ];
+    const tracks = [mk('uri:1', 'A'), mk('uri:2', 'B'), mk('uri:3', 'C')];
     expect(groupSongs(tracks)).toHaveLength(3);
+  });
+});
+
+describe('canonicalTitle (collab + version suffix handling)', () => {
+  it('strips parenthesized collab suffix', () => {
+    expect(canonicalTitle('Calling All Angels (with Quinn XCII)')).toBe('calling all angels');
+  });
+
+  it('strips dash-tail live suffix', () => {
+    expect(canonicalTitle('Candle - Live from Red Rocks')).toBe('candle');
+  });
+
+  it('strips remaster suffix', () => {
+    expect(canonicalTitle('Lithium [Remastered 2011]')).toBe('lithium');
   });
 });

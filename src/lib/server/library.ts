@@ -246,17 +246,17 @@ export async function listArtists(userId: string): Promise<ArtistRow[]> {
     uri: string;
     name: string | null;
     rating_stars: number;
+    title: string | null;
     song_family_id: string | null;
     canonical_title: string | null;
-    primary_artist_id: string | null;
   }>(sql`
     SELECT
       r.spotify_track_uri AS uri,
       a AS name,
       r.rating_stars AS rating_stars,
+      t.title AS title,
       t.song_family_id AS song_family_id,
-      t.canonical_title AS canonical_title,
-      t.primary_artist_id AS primary_artist_id
+      t.canonical_title AS canonical_title
     FROM ratings r
     JOIN tracks t ON t.spotify_track_uri = r.spotify_track_uri
     CROSS JOIN LATERAL unnest(t.artists) AS a
@@ -286,9 +286,9 @@ export async function listArtists(userId: string): Promise<ArtistRow[]> {
     if (key === '') continue;
     const entry: RatedRow = {
       uri: row.uri,
+      title: row.title,
       songFamilyId: row.song_family_id,
       canonicalTitle: row.canonical_title,
-      primaryArtistId: row.primary_artist_id,
       stars: row.rating_stars,
     };
     const g = byArtist.get(key);

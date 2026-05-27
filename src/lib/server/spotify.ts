@@ -73,10 +73,22 @@ export async function fetchSpotifyMe(
 export interface SpotifyTrack {
   uri: string;
   name: string;
-  artists: { name: string }[];
-  album: { name: string; images: { url: string; width: number; height: number }[] };
+  artists: { name: string; id?: string }[];
+  album: {
+    name: string;
+    images: { url: string; width: number; height: number }[];
+    release_date?: string;
+    release_date_precision?: 'year' | 'month' | 'day';
+  };
   duration_ms: number;
+  explicit?: boolean;
   external_ids?: { isrc?: string };
+}
+
+export interface SpotifyArtist {
+  id: string;
+  name: string;
+  genres: string[];
 }
 
 export interface CurrentlyPlaying {
@@ -101,4 +113,83 @@ export async function fetchTrack(accessToken: string, trackId: string): Promise<
   });
   if (!res.ok) throw new Error(`Spotify track fetch failed: ${res.status}`);
   return res.json();
+}
+
+// Strip the "spotify:track:" / "spotify:artist:" prefix and return the bare id.
+export function idFromUri(uri: string): string {
+  const m = uri.match(/^spotify:(?:track|artist):(.+)$/);
+  return m ? m[1] : uri;
+}
+
+// Batch /v1/tracks — up to 50 ids per call. Returns tracks in input order; nulls dropped.
+export async function fetchTracks(
+  accessToken: string,
+  uris: string[],
+): Promise<SpotifyTrack[]> {
+  if (uris.length === 0) return [];
+  const out: SpotifyTrack[] = [];
+  for (let i = 0; i < uris.length; i += 50) {
+    const ids = uris.slice(i, i + 50).map(idFromUri).join(',');
+    const res = await fetch(`https://api.spotify.com/v1/tracks?ids=${ids}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!res.ok) throw new Error(`Spotify /tracks failed: ${res.status}`);
+    const json = await res.json();
+    for (const t of json.tracks ?? []) {
+      if (t) out.push(t as SpotifyTrack);
+    }
+  }
+  return out;
+}
+
+// Batch /v1/artists — up to 50 ids per call. Returns artists; nulls dropped.
+export async function fetchArtists(
+  accessToken: string,
+  artistIds: string[],
+): Promise<SpotifyArtist[]> {
+  if (artistIds.length === 0) return [];
+  const out: SpotifyArtist[] = [];
+  for (let i = 0; i < artistIds.length; i += 50) {
+    const ids = artistIds.slice(i, i + 50).join(',');
+    const res = await fetch(`https://api.spotify.com/v1/artists?ids=${ids}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!res.ok) throw new Error(`Spotify /artists failed: ${res.status}`);
+    const json = await res.json();
+    for (const a of json.artists ?? []) {
+      if (a) out.push({ id: a.id, name: a.name, genres: a.genres ?? [] });
+    }
+  }
+  return out;
+}
+
+// Artist top tracks. `market` defaults to 'US' — Spotify requires a market param.
+export async function fetchArtistTopTracks(
+  accessToken: string,
+  artistId: string,
+  market = 'US',
+): Promise<SpotifyTrack[]> {
+  const res = await fetch(
+    `https://api.spotify.com/v1/artists/${artistId}/top-tracks?market=${market}`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+  if (!res.ok) throw new Error(`Spotify artist top-tracks failed: ${res.status}`);
+  const json = await res.json();
+  return (json.tracks ?? []) as SpotifyTrack[];
+}
+
+// Resolve a Last.fm (artist, title) pair to a Spotify URI via /v1/search.
+// Returns null when nothing plausible matches.
+export async function searchTrack(
+  accessToken: string,
+  artist: string,
+  title: string,
+): Promise<string | null> {
+  const q = `track:"${title.replace(/"/g, '')}" artist:"${artist.replace(/"/g, '')}"`;
+  const url = `https://api.spotify.com/v1/search?type=track&limit=1&q=${encodeURIComponent(q)}`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+  if (!res.ok) return null;
+  const json = await res.json();
+  const item = json.tracks?.items?.[0];
+  return item?.uri ?? null;
 }

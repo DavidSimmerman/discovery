@@ -36,7 +36,7 @@ test.afterAll(async () => {
   await closeSeedConnection();
 });
 
-test('clicking a library row plays that track first', async ({ page }) => {
+test('clicking a library row opens the track view; Play now plays that track', async ({ page }) => {
   // Intercept the play call so we can inspect the body without hitting Spotify.
   let lastBody: unknown = null;
   await page.route('**/api/spotify/player/play', async (route) => {
@@ -50,6 +50,9 @@ test('clicking a library row plays that track first', async ({ page }) => {
   const uri = await row.getAttribute('data-uri');
   expect(uri).toBeTruthy();
   await row.click();
+
+  await expect(page).toHaveURL(/\/library\/track\//);
+  await page.getByTestId('track-play-now').click();
 
   await expect.poll(() => lastBody, { timeout: 3000 }).not.toBeNull();
   const body = lastBody as { uris: string[]; device_id: string };

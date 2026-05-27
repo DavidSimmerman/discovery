@@ -120,6 +120,53 @@ export async function listLibrary(
   }));
 }
 
+export async function getLibraryTrack(
+  userId: string,
+  uri: string,
+): Promise<LibraryRow | null> {
+  const rows = await db.execute<{
+    uri: string;
+    title: string | null;
+    artists: string[] | null;
+    album_art_url: string | null;
+    rating: number | null;
+    labels: string[];
+  }>(sql`
+    SELECT
+      ${uri}::text AS uri,
+      t.title AS title,
+      t.artists AS artists,
+      t.album_art_url AS album_art_url,
+      r.rating_stars AS rating,
+      COALESCE(
+        array_agg(l.name) FILTER (WHERE l.name IS NOT NULL),
+        ARRAY[]::text[]
+      ) AS labels
+    FROM (SELECT ${uri}::text AS uri) base
+    LEFT JOIN tracks t ON t.spotify_track_uri = base.uri
+    LEFT JOIN ratings r ON r.spotify_track_uri = base.uri AND r.user_id = ${userId}
+    LEFT JOIN track_labels tl ON tl.spotify_track_uri = base.uri AND tl.user_id = ${userId}
+    LEFT JOIN labels l ON l.id = tl.label_id
+    WHERE EXISTS (
+      SELECT 1 FROM ratings WHERE user_id = ${userId} AND spotify_track_uri = ${uri}
+      UNION
+      SELECT 1 FROM track_labels WHERE user_id = ${userId} AND spotify_track_uri = ${uri}
+    )
+    GROUP BY t.title, t.artists, t.album_art_url, r.rating_stars
+  `);
+
+  const row = rows[0];
+  if (!row) return null;
+  return {
+    uri: row.uri,
+    title: row.title,
+    artists: row.artists ?? [],
+    albumArtUrl: row.album_art_url,
+    rating: row.rating,
+    labels: row.labels,
+  };
+}
+
 function orderBy(sort: LibrarySort) {
   switch (sort) {
     case 'rating':

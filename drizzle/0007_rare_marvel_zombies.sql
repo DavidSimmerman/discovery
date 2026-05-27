@@ -16,6 +16,6 @@ CREATE TABLE "user_top_tracks" (
 	CONSTRAINT "user_top_tracks_user_id_rank_pk" PRIMARY KEY("user_id","rank")
 );
 --> statement-breakpoint
+ALTER TABLE "users" ADD COLUMN "top_lists_refreshed_at" timestamp with time zone;--> statement-breakpoint
 ALTER TABLE "user_top_artists" ADD CONSTRAINT "user_top_artists_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "user_top_tracks" ADD CONSTRAINT "user_top_tracks_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "users" ADD COLUMN "top_lists_refreshed_at" timestamp with time zone;
+ALTER TABLE "user_top_tracks" ADD CONSTRAINT "user_top_tracks_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;

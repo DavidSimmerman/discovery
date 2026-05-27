@@ -93,7 +93,7 @@
           : await fetch('/api/ratings', {
               method: 'PUT',
               headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ spotifyTrackUri: uri, ratingHalfSteps: next, isrc }),
+              body: JSON.stringify({ spotifyTrackUri: uri, ratingStars: next, isrc }),
             });
       if (!res.ok) {
         rating = prev;
@@ -169,9 +169,9 @@
     if (!uri) return;
     fetch(`/api/ratings?uri=${encodeURIComponent(uri)}`).then(async (r) => {
       if (!r.ok) return;
-      const j = (await r.json()) as { ratingHalfSteps: number | null };
-      rating = j.ratingHalfSteps;
-      playback.setCurrentRating(uri, j.ratingHalfSteps);
+      const j = (await r.json()) as { ratingStars: number | null };
+      rating = j.ratingStars;
+      playback.setCurrentRating(uri, j.ratingStars);
     }).catch(() => {});
   });
 

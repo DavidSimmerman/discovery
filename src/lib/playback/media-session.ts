@@ -19,10 +19,10 @@ function ms(): MediaSession | null {
   return (navigator as Navigator).mediaSession ?? null;
 }
 
-export function setMediaMetadata(track: TrackForMeta, ratingHalfSteps: number | null): void {
+export function setMediaMetadata(track: TrackForMeta, ratingStars: number | null): void {
   const s = ms();
   if (!s) return;
-  const prefix = stars(ratingHalfSteps);
+  const prefix = stars(ratingStars);
   const title = prefix ? `${prefix} ${track.name}` : track.name;
   s.metadata = new MediaMetadata({
     title,

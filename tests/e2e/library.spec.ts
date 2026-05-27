@@ -88,14 +88,14 @@ test('filter by rating bucket: ★★★★+ and ★★★★★ chips constrain
   await page.goto('/library');
   await expect(title(page, 'Midnight City')).toBeVisible();
 
-  // ★★★★+ → minRating 8: Midnight City (10) + Strobe (9) remain.
+  // ★★★★+ → minRating 4: Midnight City (5) + Strobe (4) remain.
   await page.getByRole('button', { name: '★★★★+' }).click();
   await expect(title(page, 'Midnight City')).toBeVisible();
   await expect(title(page, 'Strobe')).toBeVisible();
   await expect(title(page, 'Levitating')).toHaveCount(0);
   await expect(title(page, 'Time')).toHaveCount(0);
 
-  // ★★★★★ → minRating 10: only Midnight City.
+  // ★★★★★ → minRating 5: only Midnight City.
   await page.getByRole('button', { name: '★★★★★' }).click();
   await expect(title(page, 'Midnight City')).toBeVisible();
   await expect(title(page, 'Strobe')).toHaveCount(0);
@@ -158,10 +158,57 @@ test('bottom nav: visible on library, routes to now-playing', async ({ page }) =
   await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
 });
 
-test('api: /api/library?minRating=8 returns the high-rated rows', async ({ page }) => {
-  const res = await page.request.get('/api/library?minRating=8');
+test('api: /api/library?minRating=4 returns the high-rated rows', async ({ page }) => {
+  const res = await page.request.get('/api/library?minRating=4');
   expect(res.ok()).toBe(true);
   const data = (await res.json()) as { rows: { title: string }[] };
   const titles = data.rows.map((r) => r.title).sort();
   expect(titles).toEqual(['Midnight City', 'Strobe']);
+});
+
+test('sort: rating sort orders songs high → low', async ({ page }) => {
+  await page.goto('/library');
+  await page.waitForLoadState('networkidle');
+  await page.getByTestId('library-sort-button').click();
+  await expect(page.getByTestId('library-sort-rating')).toBeVisible();
+  await page.getByTestId('library-sort-rating').click();
+  await page.waitForLoadState('networkidle');
+  const titles = await page.getByTestId('library-row').allInnerTexts();
+  // Seed ratings: Midnight City 5, Strobe 4, Levitating 3, Time 2
+  expect(titles[0]).toContain('Midnight City');
+  expect(titles[1]).toContain('Strobe');
+  expect(titles[2]).toContain('Levitating');
+  expect(titles[3]).toContain('Time');
+});
+
+test('artists view: lists each seeded artist with their song count', async ({ page }) => {
+  await page.goto('/library');
+  await page.waitForLoadState('networkidle');
+  await page.getByTestId('library-view-artists').click({ force: true });
+  await expect(page.getByTestId('artist-row')).toHaveCount(4);
+});
+
+test('artists drill-in: clicking an artist navigates to that artist\'s songs', async ({ page }) => {
+  await page.goto('/library');
+  await page.waitForLoadState('networkidle');
+  await page.getByTestId('library-view-artists').click({ force: true });
+  await page.getByTestId('artist-row').filter({ hasText: 'M83' }).click({ force: true });
+  await expect(page).toHaveURL(/\/library\/artist\/M83/);
+  await expect(page.getByText('Midnight City', { exact: true })).toBeVisible();
+});
+
+test('api: /api/library/artists returns weighted averages for each artist', async ({ page }) => {
+  const res = await page.request.get('/api/library/artists');
+  expect(res.ok()).toBe(true);
+  const data = (await res.json()) as {
+    rows: { name: string; count: number; avg: number; weighted: number }[];
+  };
+  expect(data.rows).toHaveLength(4);
+  for (const row of data.rows) {
+    expect(row.count).toBe(1);
+    expect(row.weighted).toBeGreaterThan(0);
+    expect(row.weighted).toBeLessThanOrEqual(5);
+    expect(row.avg).toBeGreaterThan(0);
+    expect(row.avg).toBeLessThanOrEqual(5);
+  }
 });

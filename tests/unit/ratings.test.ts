@@ -73,22 +73,22 @@ beforeEach(() => {
 describe('PUT /api/ratings', () => {
   it('inserts a new row when no existing rating shares URI or ISRC', async () => {
     h.findRatingByUriOrIsrc.mockResolvedValue(null);
-    const res = await PUT(event({ user: USER, body: { spotifyTrackUri: URI, ratingHalfSteps: 7, isrc: 'USABC1234567' } }));
+    const res = await PUT(event({ user: USER, body: { spotifyTrackUri: URI, ratingStars: 4, isrc: 'USABC1234567' } }));
     expect(res.status).toBe(200);
     expect(h.calls.insertValues).toHaveBeenCalledWith(
-      expect.objectContaining({ userId: 'user-1', spotifyTrackUri: URI, ratingHalfSteps: 7, isrc: 'USABC1234567' }),
+      expect.objectContaining({ userId: 'user-1', spotifyTrackUri: URI, ratingStars: 4, isrc: 'USABC1234567' }),
     );
     expect(h.calls.updateSet).not.toHaveBeenCalled();
   });
 
   it('updates the canonical row in place when ISRC matches a different URI', async () => {
     // Duplicate-ISRC case: a row already exists for the same recording under URI_DUP.
-    h.findRatingByUriOrIsrc.mockResolvedValue({ spotifyTrackUri: URI_DUP, ratingHalfSteps: 3 });
-    const res = await PUT(event({ user: USER, body: { spotifyTrackUri: URI, ratingHalfSteps: 8, isrc: 'USABC1234567' } }));
+    h.findRatingByUriOrIsrc.mockResolvedValue({ spotifyTrackUri: URI_DUP, ratingStars: 2 });
+    const res = await PUT(event({ user: USER, body: { spotifyTrackUri: URI, ratingStars: 4, isrc: 'USABC1234567' } }));
     expect(res.status).toBe(200);
     expect(h.calls.insertValues).not.toHaveBeenCalled();
     expect(h.calls.updateSet).toHaveBeenCalledWith(
-      expect.objectContaining({ ratingHalfSteps: 8, isrc: 'USABC1234567' }),
+      expect.objectContaining({ ratingStars: 4, isrc: 'USABC1234567' }),
     );
     expect(h.calls.updateWhere).toHaveBeenCalledTimes(1);
   });
@@ -96,40 +96,40 @@ describe('PUT /api/ratings', () => {
   it('falls back to tracks-table ISRC when body omits it', async () => {
     h.findRatingByUriOrIsrc.mockResolvedValue(null);
     h.isrcForUri.mockResolvedValue('USXYZ9999999');
-    await PUT(event({ user: USER, body: { spotifyTrackUri: URI, ratingHalfSteps: 5 } }));
+    await PUT(event({ user: USER, body: { spotifyTrackUri: URI, ratingStars: 3 } }));
     expect(h.calls.insertValues).toHaveBeenCalledWith(
       expect.objectContaining({ isrc: 'USXYZ9999999' }),
     );
   });
 
-  it('ratingHalfSteps = 0 → 400', async () => {
+  it('ratingStars = 0 → 400', async () => {
     await expect(
-      PUT(event({ user: USER, body: { spotifyTrackUri: URI, ratingHalfSteps: 0 } })),
+      PUT(event({ user: USER, body: { spotifyTrackUri: URI, ratingStars: 0 } })),
     ).rejects.toMatchObject({ status: 400 });
     expect(h.calls.insertValues).not.toHaveBeenCalled();
   });
 
-  it('ratingHalfSteps = 11 → 400', async () => {
+  it('ratingStars = 6 → 400', async () => {
     await expect(
-      PUT(event({ user: USER, body: { spotifyTrackUri: URI, ratingHalfSteps: 11 } })),
+      PUT(event({ user: USER, body: { spotifyTrackUri: URI, ratingStars: 6 } })),
     ).rejects.toMatchObject({ status: 400 });
   });
 
-  it('non-integer ratingHalfSteps (3.5) → 400', async () => {
+  it('non-integer ratingStars (3.5) → 400', async () => {
     await expect(
-      PUT(event({ user: USER, body: { spotifyTrackUri: URI, ratingHalfSteps: 3.5 } })),
+      PUT(event({ user: USER, body: { spotifyTrackUri: URI, ratingStars: 3.5 } })),
     ).rejects.toMatchObject({ status: 400 });
   });
 
   it('malformed spotifyTrackUri → 400', async () => {
     await expect(
-      PUT(event({ user: USER, body: { spotifyTrackUri: 'spotify:track:tooshort', ratingHalfSteps: 5 } })),
+      PUT(event({ user: USER, body: { spotifyTrackUri: 'spotify:track:tooshort', ratingStars: 3 } })),
     ).rejects.toMatchObject({ status: 400 });
   });
 
   it('without locals.user → 401', async () => {
     await expect(
-      PUT(event({ body: { spotifyTrackUri: URI, ratingHalfSteps: 5 } })),
+      PUT(event({ body: { spotifyTrackUri: URI, ratingStars: 3 } })),
     ).rejects.toMatchObject({ status: 401 });
     expect(h.calls.insertValues).not.toHaveBeenCalled();
   });
@@ -144,7 +144,7 @@ describe('DELETE /api/ratings', () => {
   });
 
   it('targets the canonical (ISRC-matched) URI when the supplied URI is a duplicate', async () => {
-    h.findRatingByUriOrIsrc.mockResolvedValue({ spotifyTrackUri: URI_DUP, ratingHalfSteps: 6 });
+    h.findRatingByUriOrIsrc.mockResolvedValue({ spotifyTrackUri: URI_DUP, ratingStars: 3 });
     await DELETE(event({ user: USER, body: { spotifyTrackUri: URI } }));
     expect(h.calls.deleteWhere).toHaveBeenCalledTimes(1);
     // The where condition is opaque under mocked drizzle, but we can at least

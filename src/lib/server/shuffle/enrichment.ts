@@ -49,9 +49,9 @@ import { getCachedAudioFeatures } from './providers/reccobeats';
 import { fetchRecordingByIsrc, fetchWorkCredits } from './providers/musicbrainz';
 import { fetchSimilarTracks } from './providers/lastfm';
 
-// Half-step rating threshold above which we'll burn Last.fm + search-API calls
-// to populate similars. 8 = 4 stars; tuned to keep cost down on big libraries.
-const SIMILARS_RATING_THRESHOLD = 8;
+// Whole-star rating threshold above which we'll burn Last.fm + search-API calls
+// to populate similars. 4 = 4 stars; tuned to keep cost down on big libraries.
+const SIMILARS_RATING_THRESHOLD = 4;
 
 // How many tracks to process per inner batch before yielding to the event loop.
 // Spotify batch ceilings are 50; keep below that.
@@ -149,7 +149,7 @@ async function ratingsForUris(
 ): Promise<Map<string, number>> {
   if (uris.length === 0) return new Map();
   const rows = await db
-    .select({ uri: ratings.spotifyTrackUri, r: ratings.ratingHalfSteps })
+    .select({ uri: ratings.spotifyTrackUri, r: ratings.ratingStars })
     .from(ratings)
     .where(and(eq(ratings.userId, userId), inArray(ratings.spotifyTrackUri, uris)));
   return new Map(rows.map((r) => [r.uri, r.r]));

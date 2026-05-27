@@ -1,5 +1,8 @@
 import { db } from '$lib/server/db';
 import { sql } from 'drizzle-orm';
+import { artistAverage, artistWeightedAverage } from '$lib/server/artist-score';
+
+export type LibrarySort = 'recency' | 'rating' | 'name' | 'artist';
 
 // DB approach: src/lib/server/db/index.ts exports only the Drizzle `db` (the raw
 // postgres-js client is module-private), so these UNION/aggregate queries are
@@ -18,14 +21,20 @@ export type LibraryRow = {
 
 export async function listLibrary(
   userId: string,
-  opts: { search?: string; minRating?: number; label?: string },
+  opts: {
+    search?: string;
+    minRating?: number;
+    label?: string;
+    artist?: string;
+    sort?: LibrarySort;
+  },
 ): Promise<LibraryRow[]> {
-  const { search, minRating, label } = opts;
+  const { search, minRating, label, artist, sort = 'recency' } = opts;
 
   // Optional filters, AND-combined. Each is appended only when present so that
   // absent filters add no constraint. All values are bound parameters.
   const minRatingFilter =
-    minRating !== undefined ? sql` AND r.rating_half_steps >= ${minRating}` : sql``;
+    minRating !== undefined ? sql` AND r.rating_stars >= ${minRating}` : sql``;
 
   const labelFilter =
     label !== undefined
@@ -36,6 +45,13 @@ export async function listLibrary(
             AND tlf.spotify_track_uri = base.uri
             AND lf.name = ${label}
         )`
+      : sql``;
+
+  // Match the artist by case-insensitive equality on the primary (first) artist name,
+  // which is what the artist list groups by.
+  const artistFilter =
+    artist !== undefined
+      ? sql` AND lower(trim(t.artists[1])) = lower(trim(${artist}))`
       : sql``;
 
   const searchFilter =
@@ -74,7 +90,7 @@ export async function listLibrary(
       t.title AS title,
       t.artists AS artists,
       t.album_art_url AS album_art_url,
-      r.rating_half_steps AS rating,
+      r.rating_stars AS rating,
       COALESCE(
         array_agg(l.name) FILTER (WHERE l.name IS NOT NULL),
         ARRAY[]::text[]
@@ -88,9 +104,9 @@ export async function listLibrary(
     LEFT JOIN ratings r ON r.spotify_track_uri = base.uri AND r.user_id = ${userId}
     LEFT JOIN track_labels tl ON tl.spotify_track_uri = base.uri AND tl.user_id = ${userId}
     LEFT JOIN labels l ON l.id = tl.label_id
-    WHERE TRUE${minRatingFilter}${labelFilter}${searchFilter}
-    GROUP BY base.uri, t.title, t.artists, t.album_art_url, r.rating_half_steps, r.rated_at
-    ORDER BY recency DESC
+    WHERE TRUE${minRatingFilter}${labelFilter}${artistFilter}${searchFilter}
+    GROUP BY base.uri, t.title, t.artists, t.album_art_url, r.rating_stars, r.rated_at
+    ${orderBy(sort)}
     LIMIT 500
   `);
 
@@ -102,6 +118,122 @@ export async function listLibrary(
     rating: row.rating,
     labels: row.labels,
   }));
+}
+
+export async function getLibraryTrack(
+  userId: string,
+  uri: string,
+): Promise<LibraryRow | null> {
+  const rows = await db.execute<{
+    uri: string;
+    title: string | null;
+    artists: string[] | null;
+    album_art_url: string | null;
+    rating: number | null;
+    labels: string[];
+  }>(sql`
+    SELECT
+      ${uri}::text AS uri,
+      t.title AS title,
+      t.artists AS artists,
+      t.album_art_url AS album_art_url,
+      r.rating_stars AS rating,
+      COALESCE(
+        array_agg(l.name) FILTER (WHERE l.name IS NOT NULL),
+        ARRAY[]::text[]
+      ) AS labels
+    FROM (SELECT ${uri}::text AS uri) base
+    LEFT JOIN tracks t ON t.spotify_track_uri = base.uri
+    LEFT JOIN ratings r ON r.spotify_track_uri = base.uri AND r.user_id = ${userId}
+    LEFT JOIN track_labels tl ON tl.spotify_track_uri = base.uri AND tl.user_id = ${userId}
+    LEFT JOIN labels l ON l.id = tl.label_id
+    WHERE EXISTS (
+      SELECT 1 FROM ratings WHERE user_id = ${userId} AND spotify_track_uri = ${uri}
+      UNION
+      SELECT 1 FROM track_labels WHERE user_id = ${userId} AND spotify_track_uri = ${uri}
+    )
+    GROUP BY t.title, t.artists, t.album_art_url, r.rating_stars
+  `);
+
+  const row = rows[0];
+  if (!row) return null;
+  return {
+    uri: row.uri,
+    title: row.title,
+    artists: row.artists ?? [],
+    albumArtUrl: row.album_art_url,
+    rating: row.rating,
+    labels: row.labels,
+  };
+}
+
+function orderBy(sort: LibrarySort) {
+  switch (sort) {
+    case 'rating':
+      return sql`ORDER BY r.rating_stars DESC NULLS LAST, recency DESC`;
+    case 'name':
+      return sql`ORDER BY lower(t.title) ASC NULLS LAST, recency DESC`;
+    case 'artist':
+      return sql`ORDER BY lower(t.artists[1]) ASC NULLS LAST, r.rating_stars DESC NULLS LAST, lower(t.title) ASC NULLS LAST`;
+    case 'recency':
+    default:
+      return sql`ORDER BY recency DESC`;
+  }
+}
+
+export type ArtistRow = {
+  name: string;
+  count: number;
+  avg: number;
+  weighted: number;
+};
+
+export async function listArtists(userId: string): Promise<ArtistRow[]> {
+  // Pull every rating + the primary artist name for the rated track.
+  const rows = await db.execute<{ name: string | null; rating_stars: number }>(sql`
+    SELECT
+      t.artists[1] AS name,
+      r.rating_stars AS rating_stars
+    FROM ratings r
+    JOIN tracks t ON t.spotify_track_uri = r.spotify_track_uri
+    WHERE r.user_id = ${userId}
+      AND t.artists IS NOT NULL
+      AND array_length(t.artists, 1) >= 1
+  `);
+
+  if (rows.length === 0) return [];
+
+  // Aggregate in JS: group by lowercased trimmed name; keep the most common
+  // original spelling as the display name (in practice, Spotify is consistent
+  // enough that any representative works).
+  type Agg = { display: string; ratings: number[] };
+  const groups = new Map<string, Agg>();
+
+  for (const row of rows) {
+    if (!row.name) continue;
+    const key = row.name.trim().toLowerCase();
+    if (key === '') continue;
+    const g = groups.get(key);
+    if (g) {
+      g.ratings.push(row.rating_stars);
+    } else {
+      groups.set(key, { display: row.name.trim(), ratings: [row.rating_stars] });
+    }
+  }
+
+  const out: ArtistRow[] = [];
+  for (const { display, ratings: rs } of groups.values()) {
+    out.push({
+      name: display,
+      count: rs.length,
+      avg: artistAverage(rs),
+      weighted: artistWeightedAverage(rs),
+    });
+  }
+
+  // Default order: highest weighted average first.
+  out.sort((a, b) => b.weighted - a.weighted || b.count - a.count || a.name.localeCompare(b.name));
+  return out;
 }
 
 export async function libraryFacets(

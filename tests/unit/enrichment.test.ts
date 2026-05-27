@@ -109,7 +109,7 @@ describe('computeDuplicateGroups', () => {
 });
 
 describe('SIMILARS_RATING_THRESHOLD', () => {
-  it('matches the 4-star (8 half-steps) gate', () => {
-    expect(__test.SIMILARS_RATING_THRESHOLD).toBe(8);
+  it('matches the 4-star gate', () => {
+    expect(__test.SIMILARS_RATING_THRESHOLD).toBe(4);
   });
 });

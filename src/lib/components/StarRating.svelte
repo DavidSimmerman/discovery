@@ -2,7 +2,7 @@
   import Star from './Star.svelte';
 
   type Props = {
-    value: number; // 0-10 half-steps; 0 = unrated
+    value: number; // 0-5 whole stars; 0 = unrated
     size?: number;
     interactive?: boolean;
     onchange?: (next: number) => void;
@@ -20,25 +20,22 @@
   // While dragging, the stars preview the value under the pointer.
   const displayValue = $derived(dragging ? dragValue : value);
 
-  function fillFor(i: number): 'empty' | 'half' | 'full' {
-    if (displayValue >= i * 2) return 'full';
-    if (displayValue === i * 2 - 1) return 'half';
-    return 'empty';
+  function fillFor(i: number): 'empty' | 'full' {
+    return displayValue >= i ? 'full' : 'empty';
   }
 
   function clamp(n: number): number {
-    return Math.max(0, Math.min(10, n));
+    return Math.max(0, Math.min(5, n));
   }
 
-  // Map a pointer x-coordinate to a half-step (1-10). Left half of a star = half,
-  // right half = full. Clamped to the stars' bounds.
-  function halfStepFromX(clientX: number): number {
+  // Map a pointer x-coordinate to a whole star (1-5). Anywhere on a star fills
+  // that star (and all to its left).
+  function starFromX(clientX: number): number {
     if (!trackEl) return value;
     const rect = trackEl.getBoundingClientRect();
     const starW = rect.width / 5;
     const idx = Math.max(0, Math.min(4, Math.floor((clientX - rect.left) / starW)));
-    const within = (clientX - rect.left - idx * starW) / starW;
-    return clamp(idx * 2 + (within < 0.5 ? 1 : 2));
+    return clamp(idx + 1);
   }
 
   function onpointerdown(e: PointerEvent) {
@@ -47,12 +44,12 @@
     trackEl?.setPointerCapture(e.pointerId);
     dragging = true;
     moved = false;
-    dragValue = halfStepFromX(e.clientX);
+    dragValue = starFromX(e.clientX);
   }
 
   function onpointermove(e: PointerEvent) {
     if (!dragging) return;
-    const next = halfStepFromX(e.clientX);
+    const next = starFromX(e.clientX);
     if (next !== dragValue) moved = true;
     dragValue = next;
   }
@@ -86,7 +83,7 @@
         next = 0;
         break;
       case 'End':
-        next = 10;
+        next = 5;
         break;
     }
     if (next !== null) {
@@ -104,7 +101,7 @@
     tabindex="0"
     aria-label="Rating"
     aria-valuemin={0}
-    aria-valuemax={10}
+    aria-valuemax={5}
     aria-valuenow={value}
     class="inline-flex cursor-pointer touch-none"
     {onkeydown}

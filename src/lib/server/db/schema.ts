@@ -108,12 +108,12 @@ export const ratings = pgTable(
       .references(() => users.id, { onDelete: 'cascade' }),
     spotifyTrackUri: text('spotify_track_uri').notNull(),
     isrc: text('isrc'),
-    ratingHalfSteps: smallint('rating_half_steps').notNull(),
+    ratingStars: smallint('rating_stars').notNull(),
     ratedAt: timestamp('rated_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
     primaryKey({ columns: [table.userId, table.spotifyTrackUri] }),
-    check('rating_half_steps_range', sql`${table.ratingHalfSteps} between 1 and 10`),
+    check('rating_stars_range', sql`${table.ratingStars} between 1 and 5`),
     // Used to fall back to ISRC when the same recording is encountered under a
     // different Spotify URI (Smart Shuffle / Autoplay / track relinking).
     index('ratings_user_isrc_idx').on(table.userId, table.isrc),

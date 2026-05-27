@@ -13,24 +13,24 @@ export const GET: RequestHandler = async ({ locals, url }) => {
   if (!uri) throw error(400, 'uri required');
   if (!TRACK_URI_RE.test(uri)) throw error(400, 'invalid uri');
   const found = await findRatingByUriOrIsrc(locals.user.id, uri);
-  return json({ ratingHalfSteps: found?.ratingHalfSteps ?? null });
+  return json({ ratingStars: found?.ratingStars ?? null });
 };
 
 export const PUT: RequestHandler = async ({ locals, request }) => {
   if (!locals.user) throw error(401, 'not logged in');
 
   const body = await request.json();
-  const { spotifyTrackUri, ratingHalfSteps, isrc } = body ?? {};
+  const { spotifyTrackUri, ratingStars, isrc } = body ?? {};
 
   if (typeof spotifyTrackUri !== 'string' || !TRACK_URI_RE.test(spotifyTrackUri)) {
     throw error(400, 'invalid spotifyTrackUri');
   }
   if (
-    !Number.isInteger(ratingHalfSteps) ||
-    ratingHalfSteps < 1 ||
-    ratingHalfSteps > 10
+    !Number.isInteger(ratingStars) ||
+    ratingStars < 1 ||
+    ratingStars > 5
   ) {
-    throw error(400, 'ratingHalfSteps must be an integer between 1 and 10');
+    throw error(400, 'ratingStars must be an integer between 1 and 5');
   }
 
   // Prefer the ISRC the client passed (e.g. from Spotify's currently-playing
@@ -48,7 +48,7 @@ export const PUT: RequestHandler = async ({ locals, request }) => {
   if (existing) {
     await db
       .update(ratings)
-      .set({ ratingHalfSteps, isrc: effectiveIsrc, ratedAt: new Date() })
+      .set({ ratingStars, isrc: effectiveIsrc, ratedAt: new Date() })
       .where(
         and(
           eq(ratings.userId, locals.user.id),
@@ -59,12 +59,12 @@ export const PUT: RequestHandler = async ({ locals, request }) => {
     await db.insert(ratings).values({
       userId: locals.user.id,
       spotifyTrackUri,
-      ratingHalfSteps,
+      ratingStars,
       isrc: effectiveIsrc,
     });
   }
 
-  return json({ ok: true, ratingHalfSteps });
+  return json({ ok: true, ratingStars });
 };
 
 export const DELETE: RequestHandler = async ({ locals, request }) => {

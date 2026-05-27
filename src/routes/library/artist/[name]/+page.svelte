@@ -273,8 +273,17 @@
                   data-testid="song-version"
                   data-uri={v.uri}
                   onclick={() => onRowClick(v.uri)}
-                  class="flex items-center justify-between gap-2 rounded-lg bg-white/[0.03] p-2 text-left text-xs transition-colors hover:bg-white/[0.07]"
+                  class="flex items-center gap-2 rounded-lg bg-white/[0.03] p-2 text-left text-xs transition-colors hover:bg-white/[0.07]"
                 >
+                  {#if v.albumArtUrl}
+                    <img
+                      src={v.albumArtUrl}
+                      alt=""
+                      class="size-9 flex-shrink-0 rounded-md object-cover shadow shadow-black/40"
+                    />
+                  {:else}
+                    <div class="size-9 flex-shrink-0 rounded-md bg-white/10 shadow shadow-black/40" aria-hidden="true"></div>
+                  {/if}
                   <div class="min-w-0 flex-1">
                     <div class="truncate font-medium {playback.state.track?.uri === v.uri ? 'text-spotify-green' : 'text-white/90'}">
                       {v.title ?? 'Unknown'}

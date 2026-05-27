@@ -13,6 +13,7 @@ const SCOPES = [
   'user-read-currently-playing',
   'user-read-recently-played',
   'user-library-read',
+  'user-top-read',
 ].join(' ');
 
 export const GET: RequestHandler = async ({ cookies }) => {

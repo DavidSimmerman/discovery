@@ -178,6 +178,37 @@ export async function fetchArtistTopTracks(
   return (json.tracks ?? []) as SpotifyTrack[];
 }
 
+// User's top artists/tracks. Spotify caps `limit` at 50; we only ever need 50.
+// `time_range` defaults to 'long_term' (several years), which is what we want
+// for a durable "top artists" view rather than a recency-biased one.
+export async function fetchMyTopArtists(
+  accessToken: string,
+  time_range: 'short_term' | 'medium_term' | 'long_term' = 'long_term',
+): Promise<{ id: string; name: string }[]> {
+  const url = `https://api.spotify.com/v1/me/top/artists?limit=50&time_range=${time_range}`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+  if (!res.ok) throw new Error(`Spotify /me/top/artists failed: ${res.status}`);
+  const json = await res.json();
+  return ((json.items ?? []) as { id: string; name: string }[]).map((a) => ({
+    id: a.id,
+    name: a.name,
+  }));
+}
+
+export async function fetchMyTopTracks(
+  accessToken: string,
+  time_range: 'short_term' | 'medium_term' | 'long_term' = 'long_term',
+): Promise<{ uri: string; name: string }[]> {
+  const url = `https://api.spotify.com/v1/me/top/tracks?limit=50&time_range=${time_range}`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+  if (!res.ok) throw new Error(`Spotify /me/top/tracks failed: ${res.status}`);
+  const json = await res.json();
+  return ((json.items ?? []) as { uri: string; name: string }[]).map((t) => ({
+    uri: t.uri,
+    name: t.name,
+  }));
+}
+
 // Resolve a Last.fm (artist, title) pair to a Spotify URI via /v1/search.
 // Returns null when nothing plausible matches.
 export async function searchTrack(

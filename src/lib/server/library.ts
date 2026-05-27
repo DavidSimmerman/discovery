@@ -1,6 +1,7 @@
 import { db } from '$lib/server/db';
 import { sql } from 'drizzle-orm';
-import { artistAverage, artistWeightedAverage } from '$lib/server/artist-score';
+import { artistScore, type ScoredTrack } from '$lib/server/artist-score';
+import { getTopArtistRank, getTopTrackRank } from '$lib/server/top-lists';
 
 export type LibrarySort = 'recency' | 'rating' | 'name' | 'artist';
 
@@ -104,8 +105,11 @@ export async function listLibrary(
     LEFT JOIN ratings r ON r.spotify_track_uri = base.uri AND r.user_id = ${userId}
     LEFT JOIN track_labels tl ON tl.spotify_track_uri = base.uri AND tl.user_id = ${userId}
     LEFT JOIN labels l ON l.id = tl.label_id
+    -- Joined so the rating sort can tiebreak by top-track rank without exposing
+    -- the value to the client. NULL when the track isn't in the user's top 50.
+    LEFT JOIN user_top_tracks utt ON utt.spotify_track_uri = base.uri AND utt.user_id = ${userId}
     WHERE TRUE${minRatingFilter}${labelFilter}${artistFilter}${searchFilter}
-    GROUP BY base.uri, t.title, t.artists, t.album_art_url, r.rating_stars, r.rated_at
+    GROUP BY base.uri, t.title, t.artists, t.album_art_url, r.rating_stars, r.rated_at, utt.rank
     ${orderBy(sort)}
     LIMIT 500
   `);
@@ -170,7 +174,9 @@ export async function getLibraryTrack(
 function orderBy(sort: LibrarySort) {
   switch (sort) {
     case 'rating':
-      return sql`ORDER BY r.rating_stars DESC NULLS LAST, recency DESC`;
+      // Tiebreak same-rated tracks by top-track rank (lower rank = more played).
+      // NULLs (not in top 50) sort last so unranked tracks fall below ranked ones.
+      return sql`ORDER BY r.rating_stars DESC NULLS LAST, utt.rank ASC NULLS LAST, recency DESC`;
     case 'name':
       return sql`ORDER BY lower(t.title) ASC NULLS LAST, recency DESC`;
     case 'artist':
@@ -185,13 +191,18 @@ export type ArtistRow = {
   name: string;
   count: number;
   avg: number;
-  weighted: number;
+  score: number;
 };
 
 export async function listArtists(userId: string): Promise<ArtistRow[]> {
-  // Pull every rating + the primary artist name for the rated track.
-  const rows = await db.execute<{ name: string | null; rating_stars: number }>(sql`
+  // Pull every rating + the rated track's URI and primary artist name.
+  const rows = await db.execute<{
+    uri: string;
+    name: string | null;
+    rating_stars: number;
+  }>(sql`
     SELECT
+      r.spotify_track_uri AS uri,
       t.artists[1] AS name,
       r.rating_stars AS rating_stars
     FROM ratings r
@@ -203,36 +214,51 @@ export async function listArtists(userId: string): Promise<ArtistRow[]> {
 
   if (rows.length === 0) return [];
 
-  // Aggregate in JS: group by lowercased trimmed name; keep the most common
-  // original spelling as the display name (in practice, Spotify is consistent
-  // enough that any representative works).
-  type Agg = { display: string; ratings: number[] };
+  // Top-artists/top-tracks ranks are served from the cached snapshot in
+  // user_top_artists / user_top_tracks (refreshed daily by a frontend trigger).
+  // If the cache is empty (brand-new user pre-first-refresh), the maps are
+  // simply empty and scoring proceeds with no rank bonuses.
+  const [topArtistRank, topTrackRank] = await Promise.all([
+    getTopArtistRank(userId),
+    getTopTrackRank(userId),
+  ]);
+
+  // Group by lowercased+trimmed primary artist name; keep first-seen spelling
+  // as display. Spotify spellings are stable enough in practice.
+  type Agg = { display: string; ratings: number[]; tracks: ScoredTrack[] };
   const groups = new Map<string, Agg>();
 
   for (const row of rows) {
     if (!row.name) continue;
     const key = row.name.trim().toLowerCase();
     if (key === '') continue;
+    const trackRank = topTrackRank.get(row.uri) ?? null;
     const g = groups.get(key);
     if (g) {
       g.ratings.push(row.rating_stars);
+      g.tracks.push({ stars: row.rating_stars, trackRank });
     } else {
-      groups.set(key, { display: row.name.trim(), ratings: [row.rating_stars] });
+      groups.set(key, {
+        display: row.name.trim(),
+        ratings: [row.rating_stars],
+        tracks: [{ stars: row.rating_stars, trackRank }],
+      });
     }
   }
 
   const out: ArtistRow[] = [];
-  for (const { display, ratings: rs } of groups.values()) {
+  for (const [key, { display, ratings: rs, tracks }] of groups.entries()) {
+    const artistRank = topArtistRank.get(key) ?? null;
     out.push({
       name: display,
       count: rs.length,
-      avg: artistAverage(rs),
-      weighted: artistWeightedAverage(rs),
+      avg: rs.reduce((a, b) => a + b, 0) / rs.length,
+      score: artistScore(tracks, artistRank),
     });
   }
 
-  // Default order: highest weighted average first.
-  out.sort((a, b) => b.weighted - a.weighted || b.count - a.count || a.name.localeCompare(b.name));
+  // Default order: highest score first.
+  out.sort((a, b) => b.score - a.score || b.count - a.count || a.name.localeCompare(b.name));
   return out;
 }
 

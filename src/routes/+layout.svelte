@@ -1,5 +1,6 @@
 <script lang="ts">
   import '../app.css';
+  import { onMount } from 'svelte';
   import { page } from '$app/state';
   import { createPlaybackStore, setPlaybackStore } from '$lib/playback/player.svelte';
   import MiniPlayer from '$lib/components/MiniPlayer.svelte';
@@ -9,6 +10,14 @@
 
   const playback = createPlaybackStore();
   setPlaybackStore(playback);
+
+  // Daily refresh of the user's Spotify top artists/tracks. Endpoint is
+  // idempotent + checks staleness server-side, so calling on every mount is
+  // cheap; if the data is fresh it no-ops.
+  onMount(() => {
+    if (!data.user) return;
+    void fetch('/api/me/top-lists/refresh', { method: 'POST' }).catch(() => {});
+  });
 
   // Show the persistent nav only on the in-app screens, and only when authed.
   const showNav = $derived(

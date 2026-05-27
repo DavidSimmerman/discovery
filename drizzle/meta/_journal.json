@@ -50,6 +50,13 @@
 			"when": 1779977085439,
 			"tag": "0006_melted_vulcan",
 			"breakpoints": true
+		},
+		{
+			"idx": 7,
+			"version": "7",
+			"when": 1779911500000,
+			"tag": "0007_user_top_lists",
+			"breakpoints": true
 		}
 	]
 }

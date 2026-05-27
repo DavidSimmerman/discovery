@@ -22,7 +22,7 @@
     name: string;
     count: number;
     avg: number;
-    weighted: number;
+    score: number;
   };
 
   type Facets = {
@@ -33,7 +33,7 @@
   type Tab = 'all' | 'rated' | 'labeled';
   type View = 'songs' | 'artists';
   type SongSort = 'recency' | 'rating' | 'name' | 'artist';
-  type ArtistSort = 'weighted' | 'average' | 'name' | 'count';
+  type ArtistSort = 'score' | 'average' | 'name' | 'count';
 
   const SONG_SORT_LABEL: Record<SongSort, string> = {
     recency: 'Recent',
@@ -43,7 +43,7 @@
   };
 
   const ARTIST_SORT_LABEL: Record<ArtistSort, string> = {
-    weighted: 'Weighted avg',
+    score: 'Score',
     average: 'Average',
     name: 'Name',
     count: 'Most rated',
@@ -86,7 +86,7 @@
   let activeLabel = $state<string | null>(persisted.activeLabel ?? null);
   let tab = $state<Tab>(persisted.tab ?? 'all');
   let songSort = $state<SongSort>(persisted.songSort ?? 'recency');
-  let artistSort = $state<ArtistSort>(persisted.artistSort ?? 'weighted');
+  let artistSort = $state<ArtistSort>(persisted.artistSort ?? 'score');
   let sortMenuOpen = $state(false);
 
   $effect(() => {
@@ -113,11 +113,11 @@
     if (artistSort === 'name') {
       copy.sort((a, b) => a.name.localeCompare(b.name));
     } else if (artistSort === 'count') {
-      copy.sort((a, b) => b.count - a.count || b.weighted - a.weighted);
+      copy.sort((a, b) => b.count - a.count || b.score - a.score);
     } else if (artistSort === 'average') {
       copy.sort((a, b) => b.avg - a.avg || b.count - a.count || a.name.localeCompare(b.name));
     }
-    // 'weighted' is already the server's default order.
+    // 'score' is already the server's default order.
     return copy;
   });
 
@@ -435,7 +435,7 @@
           <div
             class="absolute right-0 top-full z-10 mt-1 flex flex-col rounded-xl border border-white/10 bg-black/95 p-1 text-xs shadow-xl backdrop-blur"
           >
-            {#each (['weighted', 'average', 'name', 'count'] as const) as opt (opt)}
+            {#each (['score', 'average', 'name', 'count'] as const) as opt (opt)}
               <button
                 type="button"
                 role="menuitemradio"
@@ -508,8 +508,8 @@
       </p>
     {:else}
       <div class="flex flex-col gap-2">
-        {#each visibleArtists as artist (artist.name)}
-          <ArtistRow row={artist} onclick={onArtistClick} />
+        {#each visibleArtists as artist, i (artist.name)}
+          <ArtistRow row={artist} rank={i + 1} onclick={onArtistClick} />
         {/each}
       </div>
     {/if}

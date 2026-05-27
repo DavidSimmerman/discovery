@@ -28,6 +28,9 @@ export const users = pgTable('users', {
   displayName: text('display_name'),
   product: text('product').notNull().default('open'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  // Last time the user's Spotify top artists/tracks were refreshed.
+  // Null = never fetched yet; checked by the frontend "stale > 24h" trigger.
+  topListsRefreshedAt: timestamp('top_lists_refreshed_at', { withTimezone: true }),
 });
 
 export const spotifyTokens = pgTable('spotify_tokens', {
@@ -301,6 +304,38 @@ export const aiSuggestions = pgTable(
     // Hot path: "give me this user's unconsumed suggestions."
     index('ai_suggestions_user_unconsumed_idx').on(table.userId, table.consumedAt),
   ],
+);
+
+// User's Spotify top artists/tracks (long_term, up to 50 each). Refreshed
+// daily via a frontend-triggered endpoint; persisted so other readers
+// (cross-user views, backend playlist generators) don't need the owner
+// online to read their listening signal.
+export const userTopArtists = pgTable(
+  'user_top_artists',
+  {
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    rank: smallint('rank').notNull(),
+    spotifyArtistId: text('spotify_artist_id').notNull(),
+    name: text('name').notNull(),
+    fetchedAt: timestamp('fetched_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.userId, table.rank] })],
+);
+
+export const userTopTracks = pgTable(
+  'user_top_tracks',
+  {
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    rank: smallint('rank').notNull(),
+    spotifyTrackUri: text('spotify_track_uri').notNull(),
+    name: text('name').notNull(),
+    fetchedAt: timestamp('fetched_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.userId, table.rank] })],
 );
 
 export type User = typeof users.$inferSelect;

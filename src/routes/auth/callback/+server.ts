@@ -6,6 +6,7 @@ import { users, spotifyTokens } from '$lib/server/db/schema';
 import { eq } from 'drizzle-orm';
 import { encryptToken, loadKey } from '$lib/server/crypto';
 import { setSessionCookie } from '$lib/server/session';
+import { refreshUserTopListsInBackground } from '$lib/server/top-lists';
 
 export const GET: RequestHandler = async ({ url, cookies }) => {
   const code = url.searchParams.get('code');
@@ -62,5 +63,10 @@ export const GET: RequestHandler = async ({ url, cookies }) => {
     });
 
   setSessionCookie(cookies, userId);
+
+  // Seed top-artists/top-tracks cache so the user has data on first visit.
+  // Fire-and-forget — the redirect doesn't wait, and any failure is swallowed.
+  refreshUserTopListsInBackground(userId);
+
   throw redirect(303, '/');
 };

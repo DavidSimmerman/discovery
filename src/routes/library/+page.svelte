@@ -22,7 +22,7 @@
     name: string;
     count: number;
     avg: number;
-    score: number;
+    weighted: number;
   };
 
   type Facets = {
@@ -33,7 +33,7 @@
   type Tab = 'all' | 'rated' | 'labeled';
   type View = 'songs' | 'artists';
   type SongSort = 'recency' | 'rating' | 'name' | 'artist';
-  type ArtistSort = 'score' | 'name' | 'count';
+  type ArtistSort = 'weighted' | 'average' | 'name' | 'count';
 
   const SONG_SORT_LABEL: Record<SongSort, string> = {
     recency: 'Recent',
@@ -43,7 +43,8 @@
   };
 
   const ARTIST_SORT_LABEL: Record<ArtistSort, string> = {
-    score: 'Score',
+    weighted: 'Weighted avg',
+    average: 'Average',
     name: 'Name',
     count: 'Most rated',
   };
@@ -85,7 +86,7 @@
   let activeLabel = $state<string | null>(persisted.activeLabel ?? null);
   let tab = $state<Tab>(persisted.tab ?? 'all');
   let songSort = $state<SongSort>(persisted.songSort ?? 'recency');
-  let artistSort = $state<ArtistSort>(persisted.artistSort ?? 'score');
+  let artistSort = $state<ArtistSort>(persisted.artistSort ?? 'weighted');
   let sortMenuOpen = $state(false);
 
   $effect(() => {
@@ -112,9 +113,11 @@
     if (artistSort === 'name') {
       copy.sort((a, b) => a.name.localeCompare(b.name));
     } else if (artistSort === 'count') {
-      copy.sort((a, b) => b.count - a.count || b.score - a.score);
+      copy.sort((a, b) => b.count - a.count || b.weighted - a.weighted);
+    } else if (artistSort === 'average') {
+      copy.sort((a, b) => b.avg - a.avg || b.count - a.count || a.name.localeCompare(b.name));
     }
-    // 'score' is already the server's default order.
+    // 'weighted' is already the server's default order.
     return copy;
   });
 
@@ -432,7 +435,7 @@
           <div
             class="absolute right-0 top-full z-10 mt-1 flex flex-col rounded-xl border border-white/10 bg-black/95 p-1 text-xs shadow-xl backdrop-blur"
           >
-            {#each (['score', 'name', 'count'] as const) as opt (opt)}
+            {#each (['weighted', 'average', 'name', 'count'] as const) as opt (opt)}
               <button
                 type="button"
                 role="menuitemradio"

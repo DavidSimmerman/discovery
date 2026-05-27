@@ -5,12 +5,12 @@
     name: string;
     count: number;
     avg: number;
-    score: number;
+    weighted: number;
   };
 
   let { row, onclick }: { row: Row; onclick?: (name: string) => void } = $props();
 
-  const scoreText = $derived(row.score.toFixed(1));
+  const weightedText = $derived(row.weighted.toFixed(1));
   const avgText = $derived(row.avg.toFixed(1));
   const countText = $derived(`${row.count} ${row.count === 1 ? 'song' : 'songs'}`);
 </script>
@@ -35,6 +35,6 @@
 
   <div class="flex flex-shrink-0 items-center gap-0.5 text-spotify-green">
     <Star class="size-3.5 fill-current" />
-    <span class="text-sm font-bold tabular-nums">{scoreText}</span>
+    <span class="text-sm font-bold tabular-nums">{weightedText}</span>
   </div>
 </div>

@@ -1,83 +1,90 @@
 import { describe, it, expect } from 'vitest';
-import { artistScore } from '../../src/lib/server/artist-score';
+import { artistAverage, artistWeightedAverage } from '../../src/lib/server/artist-score';
 
-describe('artistScore — hit volume', () => {
-  it('10 × 5★ → at least 4.95', () => {
-    expect(artistScore(Array(10).fill(5))).toBeGreaterThanOrEqual(4.95);
+describe('artistAverage', () => {
+  it('returns 0 for no ratings', () => {
+    expect(artistAverage([])).toBe(0);
   });
 
-  it('15+ × 5★ → essentially 5.0', () => {
-    expect(artistScore(Array(15).fill(5))).toBeGreaterThanOrEqual(4.99);
-  });
-
-  it('1 × 5★ → not too high (low-volume pull)', () => {
-    const s = artistScore([5]);
-    expect(s).toBeGreaterThan(3);
-    expect(s).toBeLessThan(3.9);
-  });
-
-  it('volume monotonicity: more hits → higher score', () => {
-    const a = artistScore([5]);
-    const b = artistScore([5, 5, 5]);
-    const c = artistScore(Array(10).fill(5));
-    const d = artistScore(Array(20).fill(5));
-    expect(b).toBeGreaterThan(a);
-    expect(c).toBeGreaterThan(b);
-    expect(d).toBeGreaterThan(c);
+  it('returns the straight mean', () => {
+    expect(artistAverage([5, 4, 3])).toBeCloseTo(4);
+    expect(artistAverage([5])).toBe(5);
+    expect(artistAverage([1, 2, 3, 4, 5])).toBe(3);
   });
 });
 
-describe('artistScore — misses matter when hits are few', () => {
-  it('1 hit + 2 misses ≈ 1 hit + 0 misses (small drop)', () => {
-    const clean = artistScore([5]);
-    const fewMisses = artistScore([5, 0.5, 0.5]);
-    expect(fewMisses).toBeLessThan(clean);
-    expect(clean - fewMisses).toBeLessThan(0.4);
+describe('artistWeightedAverage — tier: count ≤ 5', () => {
+  it('returns 0 for no ratings', () => {
+    expect(artistWeightedAverage([])).toBe(0);
   });
 
-  it('1 hit + 10 misses < 1 hit + 0 misses (meaningful drop)', () => {
-    const clean = artistScore([5]);
-    const manyMisses = artistScore([5, ...Array(10).fill(1)]);
-    expect(manyMisses).toBeLessThan(clean - 0.3);
+  it('5×5 ratings get multiplied by 21/25 (max ~4.2)', () => {
+    expect(artistWeightedAverage([5, 5, 5, 5, 5])).toBeCloseTo(5 * (21 / 25));
   });
 
-  it('many hits absorb misses: 10H + 20M still scores high (~4.5+)', () => {
-    const s = artistScore([...Array(10).fill(5), ...Array(20).fill(2)]);
-    expect(s).toBeGreaterThan(4.5);
+  it('one 5★ caps at 4.2', () => {
+    expect(artistWeightedAverage([5])).toBeCloseTo(4.2);
   });
 
-  it('15 hits + many misses still ~5', () => {
-    const s = artistScore([...Array(15).fill(5), ...Array(50).fill(2)]);
-    expect(s).toBeGreaterThan(4.8);
+  it('average of [4, 2] × 21/25', () => {
+    expect(artistWeightedAverage([4, 2])).toBeCloseTo(3 * (21 / 25));
   });
 });
 
-describe('artistScore — no hits', () => {
-  it('no ratings at all → neutral (3)', () => {
-    expect(artistScore([])).toBe(3);
+describe('artistWeightedAverage — tier: 6..10', () => {
+  it('6 songs all 5★ → top 60% (ceil = 4), capped at 4.6', () => {
+    expect(artistWeightedAverage(Array(6).fill(5))).toBe(4.6);
   });
 
-  it('only misses → below 3, decays with miss count', () => {
-    const oneMiss = artistScore([1]);
-    const fiveMisses = artistScore([1, 1, 1, 1, 1]);
-    const manyMisses = artistScore(Array(20).fill(1));
-    expect(oneMiss).toBeLessThan(3);
-    expect(fiveMisses).toBeLessThan(oneMiss);
-    expect(manyMisses).toBeLessThan(fiveMisses);
+  it('10 songs all 5★ → top 6, capped at 4.6', () => {
+    expect(artistWeightedAverage(Array(10).fill(5))).toBe(4.6);
+  });
+
+  it('only the top 60% counts: low ratings outside top window are ignored', () => {
+    // 10 ratings: top 6 are 5s, rest are 1s → mean = 5, capped at 4.6
+    const rs = [...Array(6).fill(5), ...Array(4).fill(1)];
+    expect(artistWeightedAverage(rs)).toBe(4.6);
+  });
+
+  it('cap applies: a top-60% mean below 4.6 is returned as-is', () => {
+    const rs = [4, 4, 4, 4, 4, 4, 4, 4, 4, 4];
+    expect(artistWeightedAverage(rs)).toBe(4);
   });
 });
 
-describe('artistScore — ordering invariants', () => {
-  it('deep catalog of hits beats a one-hit-wonder', () => {
-    expect(artistScore(Array(20).fill(5))).toBeGreaterThan(artistScore([5]));
+describe('artistWeightedAverage — tier: 11..20', () => {
+  it('20 songs all 5★ → top 10, no cap → 5.0', () => {
+    expect(artistWeightedAverage(Array(20).fill(5))).toBe(5);
   });
 
-  it('quality of hits matters: 5★ hits score above 3★ hits at same volume', () => {
-    expect(artistScore(Array(5).fill(5))).toBeGreaterThan(artistScore(Array(5).fill(3)));
+  it('11 songs all 5★ → top 6 (ceil 5.5), 5.0', () => {
+    expect(artistWeightedAverage(Array(11).fill(5))).toBe(5);
   });
 
-  it('score stays within [0, 5]', () => {
-    expect(artistScore([5, 5, 5, 5, 5])).toBeLessThanOrEqual(5);
-    expect(artistScore(Array(100).fill(0.5))).toBeGreaterThanOrEqual(0);
+  it('only top 50% counts', () => {
+    const rs = [...Array(10).fill(5), ...Array(10).fill(1)];
+    expect(artistWeightedAverage(rs)).toBe(5);
+  });
+});
+
+describe('artistWeightedAverage — tier: 21+', () => {
+  it('100 songs all 5★ → top 10 avg = 5.0', () => {
+    expect(artistWeightedAverage(Array(100).fill(5))).toBe(5);
+  });
+
+  it('long tail of low ratings does not pull down the top 10', () => {
+    const rs = [...Array(10).fill(5), ...Array(90).fill(1)];
+    expect(artistWeightedAverage(rs)).toBe(5);
+  });
+});
+
+describe('artistWeightedAverage — ordering invariants', () => {
+  it('deep catalog of 5★s beats a one-hit-wonder', () => {
+    expect(artistWeightedAverage(Array(20).fill(5))).toBeGreaterThan(artistWeightedAverage([5]));
+  });
+
+  it('stays within [0, 5]', () => {
+    expect(artistWeightedAverage([5, 5, 5, 5, 5])).toBeLessThanOrEqual(5);
+    expect(artistWeightedAverage(Array(100).fill(0))).toBeGreaterThanOrEqual(0);
   });
 });

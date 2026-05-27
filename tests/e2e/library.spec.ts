@@ -197,14 +197,18 @@ test('artists drill-in: clicking an artist navigates to that artist\'s songs', a
   await expect(page.getByText('Midnight City', { exact: true })).toBeVisible();
 });
 
-test('api: /api/library/artists returns Bayesian scores for each artist', async ({ page }) => {
+test('api: /api/library/artists returns weighted averages for each artist', async ({ page }) => {
   const res = await page.request.get('/api/library/artists');
   expect(res.ok()).toBe(true);
-  const data = (await res.json()) as { rows: { name: string; count: number; score: number }[] };
+  const data = (await res.json()) as {
+    rows: { name: string; count: number; avg: number; weighted: number }[];
+  };
   expect(data.rows).toHaveLength(4);
   for (const row of data.rows) {
     expect(row.count).toBe(1);
-    expect(row.score).toBeGreaterThan(0);
-    expect(row.score).toBeLessThanOrEqual(5);
+    expect(row.weighted).toBeGreaterThan(0);
+    expect(row.weighted).toBeLessThanOrEqual(5);
+    expect(row.avg).toBeGreaterThan(0);
+    expect(row.avg).toBeLessThanOrEqual(5);
   }
 });

@@ -1,49 +1,42 @@
-// "How many hits do you have?" score. Hits (rating >= HIT_THRESHOLD) drive
-// the score. Misses (rating < HIT_THRESHOLD) only matter when there are few
-// hits — once an artist has a deep catalog of bangers, the long tail of
-// songs you don't love stops counting against them. With zero hits, the
-// score sits below NEUTRAL and decays as misses pile up.
+// Artist scoring: two views of "how good is this artist?"
 //
-//   hits-present:  base    = hitAvg * conf(h) + NEUTRAL * (1 − conf(h))
-//                  penalty = MISS_PENALTY_WEIGHT * ln(m + 1) / (h + 1)
-//                  score   = max(0, base − penalty)
+//   artistAverage(ratings)         — straight mean of every rating
+//   artistWeightedAverage(ratings) — tiered top-K mean with caps that scale
+//                                    by sample size, so an artist with one
+//                                    5★ song can't outrank an artist with
+//                                    a deep catalog of bangers.
 //
-//   no hits:       score = NEUTRAL − NO_HIT_PENALTY_WEIGHT * ln(m + 1)
-//
-//   conf(h) = 1 − exp(−h / CONFIDENCE_SCALE)
-//
-// Tunable constants:
-//   HIT_THRESHOLD          (3)   — ratings at or above this count as hits
-//   NEUTRAL                (3)   — score with no info / fully discounted
-//   CONFIDENCE_SCALE       (2.5) — h at which we mostly trust the hit average
-//   MISS_PENALTY_WEIGHT    (0.3) — how much misses pull a hits-present score
-//   NO_HIT_PENALTY_WEIGHT  (0.4) — how much misses pull the no-hits score
-export const HIT_THRESHOLD = 3;
-export const NEUTRAL = 3;
-export const CONFIDENCE_SCALE = 2.5;
-export const MISS_PENALTY_WEIGHT = 0.3;
-export const NO_HIT_PENALTY_WEIGHT = 0.4;
+// Weighted tiers (count = number of rated songs):
+//   count ≤ 5    → mean of all ratings × 21/25  (effective cap ≈ 4.2)
+//   count ≤ 10   → mean of top 60%, capped at 4.6
+//   count ≤ 20   → mean of top 50%, capped at 5.0
+//   count >  20  → mean of top 10 songs,  capped at 5.0
 
-export function artistScore(ratings: number[]): number {
-  let hitSum = 0;
-  let h = 0;
-  let m = 0;
-  for (const r of ratings) {
-    if (r >= HIT_THRESHOLD) {
-      hitSum += r;
-      h += 1;
-    } else {
-      m += 1;
-    }
+export function artistAverage(ratings: number[]): number {
+  if (ratings.length === 0) return 0;
+  const sum = ratings.reduce((a, b) => a + b, 0);
+  return sum / ratings.length;
+}
+
+export function artistWeightedAverage(ratings: number[]): number {
+  const n = ratings.length;
+  if (n === 0) return 0;
+
+  if (n <= 5) {
+    return artistAverage(ratings) * (21 / 25);
   }
 
-  if (h === 0) {
-    return Math.max(0, NEUTRAL - NO_HIT_PENALTY_WEIGHT * Math.log(m + 1));
-  }
+  const sorted = [...ratings].sort((a, b) => b - a);
+  const topMean = (k: number) => {
+    const slice = sorted.slice(0, Math.max(1, k));
+    return slice.reduce((a, b) => a + b, 0) / slice.length;
+  };
 
-  const hitAvg = hitSum / h;
-  const confidence = 1 - Math.exp(-h / CONFIDENCE_SCALE);
-  const base = hitAvg * confidence + NEUTRAL * (1 - confidence);
-  const penalty = (MISS_PENALTY_WEIGHT * Math.log(m + 1)) / (h + 1);
-  return Math.max(0, base - penalty);
+  if (n <= 10) {
+    return Math.min(4.6, topMean(Math.ceil(n * 0.6)));
+  }
+  if (n <= 20) {
+    return Math.min(5, topMean(Math.ceil(n * 0.5)));
+  }
+  return Math.min(5, topMean(10));
 }

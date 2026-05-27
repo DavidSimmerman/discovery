@@ -1,6 +1,6 @@
 import { db } from '$lib/server/db';
 import { sql } from 'drizzle-orm';
-import { artistScore } from '$lib/server/artist-score';
+import { artistAverage, artistWeightedAverage } from '$lib/server/artist-score';
 
 export type LibrarySort = 'recency' | 'rating' | 'name' | 'artist';
 
@@ -185,7 +185,7 @@ export type ArtistRow = {
   name: string;
   count: number;
   avg: number;
-  score: number;
+  weighted: number;
 };
 
 export async function listArtists(userId: string): Promise<ArtistRow[]> {
@@ -223,15 +223,16 @@ export async function listArtists(userId: string): Promise<ArtistRow[]> {
 
   const out: ArtistRow[] = [];
   for (const { display, ratings: rs } of groups.values()) {
-    const count = rs.length;
-    const sum = rs.reduce((a, b) => a + b, 0);
-    const avg = sum / count;
-    const score = artistScore(rs);
-    out.push({ name: display, count, avg, score });
+    out.push({
+      name: display,
+      count: rs.length,
+      avg: artistAverage(rs),
+      weighted: artistWeightedAverage(rs),
+    });
   }
 
-  // Default order: highest score first.
-  out.sort((a, b) => b.score - a.score || b.count - a.count || a.name.localeCompare(b.name));
+  // Default order: highest weighted average first.
+  out.sort((a, b) => b.weighted - a.weighted || b.count - a.count || a.name.localeCompare(b.name));
   return out;
 }
 

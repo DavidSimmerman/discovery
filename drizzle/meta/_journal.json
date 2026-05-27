@@ -57,6 +57,13 @@
       "when": 1779977100000,
       "tag": "0007_rare_marvel_zombies",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1779977200000,
+      "tag": "0008_users_needs_reauth",
+      "breakpoints": true
     }
   ]
 }

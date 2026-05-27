@@ -31,7 +31,7 @@ export const GET: RequestHandler = async ({ url, cookies }) => {
   if (existing[0]) {
     userId = existing[0].id;
     await db.update(users)
-      .set({ displayName: me.display_name, product })
+      .set({ displayName: me.display_name, product, needsReauth: false })
       .where(eq(users.id, userId));
   } else {
     const inserted = await db.insert(users)

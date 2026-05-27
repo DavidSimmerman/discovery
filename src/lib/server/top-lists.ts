@@ -13,7 +13,7 @@ import { db } from '$lib/server/db';
 import { users, userTopArtists, userTopTracks } from '$lib/server/db/schema';
 import { eq } from 'drizzle-orm';
 import { getValidAccessToken } from '$lib/server/tokens';
-import { fetchMyTopArtists, fetchMyTopTracks } from '$lib/server/spotify';
+import { fetchMyTopArtists, fetchMyTopTracks, SpotifyApiError } from '$lib/server/spotify';
 
 const STALE_MS = 24 * 60 * 60 * 1000;
 
@@ -91,8 +91,21 @@ export async function refreshUserTopLists(userId: string): Promise<void> {
 // Fire-and-forget refresh that swallows errors. Use from OAuth callback and
 // frontend-triggered staleness checks so a transient Spotify hiccup never
 // blocks the user.
+//
+// A 403 on /me/top/* means the stored refresh token doesn't grant the
+// user-top-read scope — that scope was added after some users authorized.
+// Flag the user so the next request bounces them through /auth/login to
+// re-consent. Any other failure is logged and otherwise ignored.
 export function refreshUserTopListsInBackground(userId: string): void {
-  void refreshUserTopLists(userId).catch((err) => {
+  void refreshUserTopLists(userId).catch(async (err) => {
+    if (err instanceof SpotifyApiError && err.status === 403) {
+      try {
+        await db.update(users).set({ needsReauth: true }).where(eq(users.id, userId));
+      } catch (markErr) {
+        console.error('failed to flag user for re-auth', { userId, markErr });
+      }
+      return;
+    }
     console.error('refreshUserTopLists failed', { userId, err });
   });
 }

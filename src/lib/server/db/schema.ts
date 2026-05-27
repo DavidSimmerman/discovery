@@ -31,6 +31,11 @@ export const users = pgTable('users', {
   // Last time the user's Spotify top artists/tracks were refreshed.
   // Null = never fetched yet; checked by the frontend "stale > 24h" trigger.
   topListsRefreshedAt: timestamp('top_lists_refreshed_at', { withTimezone: true }),
+  // Set true when a Spotify API call fails with 403/insufficient_scope, which
+  // means the stored refresh token was minted before a scope we now require.
+  // The root layout server load redirects flagged users through /auth/login;
+  // the OAuth callback clears the flag on successful re-auth.
+  needsReauth: boolean('needs_reauth').notNull().default(false),
 });
 
 export const spotifyTokens = pgTable('spotify_tokens', {

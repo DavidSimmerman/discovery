@@ -4,6 +4,17 @@ import { PUBLIC_BASE_URL } from '$env/static/public';
 const TOKEN_URL = 'https://accounts.spotify.com/api/token';
 const REDIRECT_URI = `${PUBLIC_BASE_URL}/auth/callback`;
 
+// Carries the HTTP status so callers can branch on 403 (insufficient scope)
+// vs. transient 5xx without parsing error message strings.
+export class SpotifyApiError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'SpotifyApiError';
+    this.status = status;
+  }
+}
+
 export interface TokenSet {
   access_token: string;
   refresh_token: string;
@@ -187,7 +198,7 @@ export async function fetchMyTopArtists(
 ): Promise<{ id: string; name: string }[]> {
   const url = `https://api.spotify.com/v1/me/top/artists?limit=50&time_range=${time_range}`;
   const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
-  if (!res.ok) throw new Error(`Spotify /me/top/artists failed: ${res.status}`);
+  if (!res.ok) throw new SpotifyApiError(res.status, `Spotify /me/top/artists failed: ${res.status}`);
   const json = await res.json();
   return ((json.items ?? []) as { id: string; name: string }[]).map((a) => ({
     id: a.id,
@@ -201,7 +212,7 @@ export async function fetchMyTopTracks(
 ): Promise<{ uri: string; name: string }[]> {
   const url = `https://api.spotify.com/v1/me/top/tracks?limit=50&time_range=${time_range}`;
   const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
-  if (!res.ok) throw new Error(`Spotify /me/top/tracks failed: ${res.status}`);
+  if (!res.ok) throw new SpotifyApiError(res.status, `Spotify /me/top/tracks failed: ${res.status}`);
   const json = await res.json();
   return ((json.items ?? []) as { uri: string; name: string }[]).map((t) => ({
     uri: t.uri,

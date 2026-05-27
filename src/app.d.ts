@@ -6,6 +6,7 @@ declare global {
         spotifyId: string;
         displayName: string | null;
         product: 'premium' | 'free' | 'open';
+        needsReauth: boolean;
       } | null;
     }
   }

@@ -2,6 +2,7 @@ import { db } from '$lib/server/db';
 import { sql } from 'drizzle-orm';
 import { artistScore, type ScoredTrack } from '$lib/server/artist-score';
 import { getTopArtistRank, getTopTrackRank } from '$lib/server/top-lists';
+import { groupSongs, type Groupable } from '$lib/song-group';
 
 export type LibrarySort = 'recency' | 'rating' | 'name' | 'artist';
 
@@ -18,6 +19,13 @@ export type LibraryRow = {
   albumArtUrl: string | null;
   rating: number | null;
   labels: string[];
+  // Song-version metadata so callers (e.g. artist page) can collapse versions.
+  // Nullable until the enrichment worker has touched the track.
+  songFamilyId: string | null;
+  canonicalTitle: string | null;
+  primaryArtistId: string | null;
+  versionType: string | null;
+  album: string | null;
 };
 
 export async function listLibrary(
@@ -84,6 +92,11 @@ export async function listLibrary(
     album_art_url: string | null;
     rating: number | null;
     labels: string[];
+    song_family_id: string | null;
+    canonical_title: string | null;
+    primary_artist_id: string | null;
+    version_type: string | null;
+    album: string | null;
   }>(sql`
     WITH base AS (
       SELECT spotify_track_uri AS uri FROM ratings WHERE user_id = ${userId}
@@ -100,6 +113,11 @@ export async function listLibrary(
         array_agg(l.name) FILTER (WHERE l.name IS NOT NULL),
         ARRAY[]::text[]
       ) AS labels,
+      t.song_family_id AS song_family_id,
+      t.canonical_title AS canonical_title,
+      t.primary_artist_id AS primary_artist_id,
+      t.version_type AS version_type,
+      t.album AS album,
       GREATEST(
         COALESCE(r.rated_at, 'epoch'::timestamptz),
         COALESCE(max(tl.applied_at), 'epoch'::timestamptz)
@@ -113,7 +131,8 @@ export async function listLibrary(
     -- the value to the client. NULL when the track isn't in the user's top 50.
     LEFT JOIN user_top_tracks utt ON utt.spotify_track_uri = base.uri AND utt.user_id = ${userId}
     WHERE TRUE${minRatingFilter}${labelFilter}${artistFilter}${searchFilter}
-    GROUP BY base.uri, t.title, t.artists, t.album_art_url, r.rating_stars, r.rated_at, utt.rank
+    GROUP BY base.uri, t.title, t.artists, t.album_art_url, r.rating_stars, r.rated_at, utt.rank,
+             t.song_family_id, t.canonical_title, t.primary_artist_id, t.version_type, t.album
     ${orderBy(sort)}
     LIMIT 500
   `);
@@ -125,6 +144,11 @@ export async function listLibrary(
     albumArtUrl: row.album_art_url,
     rating: row.rating,
     labels: row.labels,
+    songFamilyId: row.song_family_id,
+    canonicalTitle: row.canonical_title,
+    primaryArtistId: row.primary_artist_id,
+    versionType: row.version_type,
+    album: row.album,
   }));
 }
 
@@ -139,6 +163,11 @@ export async function getLibraryTrack(
     album_art_url: string | null;
     rating: number | null;
     labels: string[];
+    song_family_id: string | null;
+    canonical_title: string | null;
+    primary_artist_id: string | null;
+    version_type: string | null;
+    album: string | null;
   }>(sql`
     SELECT
       ${uri}::text AS uri,
@@ -149,7 +178,12 @@ export async function getLibraryTrack(
       COALESCE(
         array_agg(l.name) FILTER (WHERE l.name IS NOT NULL),
         ARRAY[]::text[]
-      ) AS labels
+      ) AS labels,
+      t.song_family_id AS song_family_id,
+      t.canonical_title AS canonical_title,
+      t.primary_artist_id AS primary_artist_id,
+      t.version_type AS version_type,
+      t.album AS album
     FROM (SELECT ${uri}::text AS uri) base
     LEFT JOIN tracks t ON t.spotify_track_uri = base.uri
     LEFT JOIN ratings r ON r.spotify_track_uri = base.uri AND r.user_id = ${userId}
@@ -160,7 +194,8 @@ export async function getLibraryTrack(
       UNION
       SELECT 1 FROM track_labels WHERE user_id = ${userId} AND spotify_track_uri = ${uri}
     )
-    GROUP BY t.title, t.artists, t.album_art_url, r.rating_stars
+    GROUP BY t.title, t.artists, t.album_art_url, r.rating_stars,
+             t.song_family_id, t.canonical_title, t.primary_artist_id, t.version_type, t.album
   `);
 
   const row = rows[0];
@@ -172,6 +207,11 @@ export async function getLibraryTrack(
     albumArtUrl: row.album_art_url,
     rating: row.rating,
     labels: row.labels,
+    songFamilyId: row.song_family_id,
+    canonicalTitle: row.canonical_title,
+    primaryArtistId: row.primary_artist_id,
+    versionType: row.version_type,
+    album: row.album,
   };
 }
 
@@ -200,16 +240,23 @@ export type ArtistRow = {
 
 export async function listArtists(userId: string): Promise<ArtistRow[]> {
   // One row per (rating, credited artist) — unnest so featured artists get
-  // credited for the track too, not just the primary.
+  // credited for the track too, not just the primary. Song-version metadata
+  // comes along so we can collapse duplicates per artist before scoring.
   const rows = await db.execute<{
     uri: string;
     name: string | null;
     rating_stars: number;
+    song_family_id: string | null;
+    canonical_title: string | null;
+    primary_artist_id: string | null;
   }>(sql`
     SELECT
       r.spotify_track_uri AS uri,
       a AS name,
-      r.rating_stars AS rating_stars
+      r.rating_stars AS rating_stars,
+      t.song_family_id AS song_family_id,
+      t.canonical_title AS canonical_title,
+      t.primary_artist_id AS primary_artist_id
     FROM ratings r
     JOIN tracks t ON t.spotify_track_uri = r.spotify_track_uri
     CROSS JOIN LATERAL unnest(t.artists) AS a
@@ -229,37 +276,59 @@ export async function listArtists(userId: string): Promise<ArtistRow[]> {
     getTopTrackRank(userId),
   ]);
 
-  // Group by lowercased+trimmed primary artist name; keep first-seen spelling
-  // as display. Spotify spellings are stable enough in practice.
-  type Agg = { display: string; ratings: number[]; tracks: ScoredTrack[] };
-  const groups = new Map<string, Agg>();
+  type RatedRow = Groupable & { stars: number };
+  type Agg = { display: string; tracks: RatedRow[] };
+  const byArtist = new Map<string, Agg>();
 
   for (const row of rows) {
     if (!row.name) continue;
     const key = row.name.trim().toLowerCase();
     if (key === '') continue;
-    const trackRank = topTrackRank.get(row.uri) ?? null;
-    const g = groups.get(key);
-    if (g) {
-      g.ratings.push(row.rating_stars);
-      g.tracks.push({ stars: row.rating_stars, trackRank });
-    } else {
-      groups.set(key, {
-        display: row.name.trim(),
-        ratings: [row.rating_stars],
-        tracks: [{ stars: row.rating_stars, trackRank }],
-      });
-    }
+    const entry: RatedRow = {
+      uri: row.uri,
+      songFamilyId: row.song_family_id,
+      canonicalTitle: row.canonical_title,
+      primaryArtistId: row.primary_artist_id,
+      stars: row.rating_stars,
+    };
+    const g = byArtist.get(key);
+    if (g) g.tracks.push(entry);
+    else byArtist.set(key, { display: row.name.trim(), tracks: [entry] });
   }
 
   const out: ArtistRow[] = [];
-  for (const [key, { display, ratings: rs, tracks }] of groups.entries()) {
+  for (const [key, { display, tracks }] of byArtist.entries()) {
+    // Collapse same-song duplicates within this artist's catalog. For each
+    // group keep the version with the highest stars; tiebreak by top-track
+    // bonus so a top-50 version outranks a duplicate that isn't ranked.
+    const songGroups = groupSongs(tracks);
+    const scored: ScoredTrack[] = [];
+    const stars: number[] = [];
+    for (const group of songGroups) {
+      let best = group[0];
+      let bestBonus = topTrackRank.get(best.uri) ?? null;
+      for (let i = 1; i < group.length; i++) {
+        const cand = group[i];
+        const candBonus = topTrackRank.get(cand.uri) ?? null;
+        if (
+          cand.stars > best.stars ||
+          (cand.stars === best.stars &&
+            (candBonus ?? Number.POSITIVE_INFINITY) < (bestBonus ?? Number.POSITIVE_INFINITY))
+        ) {
+          best = cand;
+          bestBonus = candBonus;
+        }
+      }
+      scored.push({ stars: best.stars, trackRank: bestBonus });
+      stars.push(best.stars);
+    }
+
     const artistRank = topArtistRank.get(key) ?? null;
     out.push({
       name: display,
-      count: rs.length,
-      avg: rs.reduce((a, b) => a + b, 0) / rs.length,
-      score: artistScore(tracks, artistRank),
+      count: stars.length,
+      avg: stars.reduce((a, b) => a + b, 0) / stars.length,
+      score: artistScore(scored, artistRank),
     });
   }
 

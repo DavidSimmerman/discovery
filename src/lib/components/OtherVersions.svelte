@@ -18,7 +18,10 @@
 
   let { trackUri, currentUri = null }: { trackUri: string; currentUri?: string | null } = $props();
 
+  // `loading` starts true so the initial mount renders the spinner instead of
+  // flashing the empty-state branch for a frame before the first fetch lands.
   let loading = $state(true);
+  let loadedFor = $state<string | null>(null);
   let library = $state<Entry[]>([]);
   let catalog = $state<Entry[]>([]);
 
@@ -30,13 +33,18 @@
 
   let inflight: AbortController | null = null;
 
-  async function load() {
+  async function load(uri: string) {
     inflight?.abort();
     const ac = new AbortController();
     inflight = ac;
     loading = true;
+    // Reset cover state when switching tracks so a stale "done" set doesn't
+    // bleed onto the next song.
+    coverState = 'idle';
+    covers = [];
+    coverError = null;
     try {
-      const res = await fetch(`/api/track-versions/${encodeURIComponent(trackUri)}`, {
+      const res = await fetch(`/api/track-versions/${encodeURIComponent(uri)}`, {
         signal: ac.signal,
       });
       if (!res.ok) {
@@ -106,8 +114,14 @@
   }
 
   // Reload when the source track changes (e.g. now-playing flips to next song).
+  // Guard on `loadedFor` so we DON'T re-fire on every playback-position tick:
+  // `trackUri` is wired through a $derived that depends on position_ms, so the
+  // effect re-evaluates many times a second even when the URI is unchanged.
   $effect(() => {
-    if (trackUri) void load();
+    const uri = trackUri;
+    if (!uri || uri === loadedFor) return;
+    loadedFor = uri;
+    void load(uri);
   });
 
   onMount(() => {

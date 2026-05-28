@@ -1,42 +1,57 @@
-// Artist scoring: two views of "how good is this artist?"
+// Artist scoring: sum per-song points (with a per-song listening bonus for
+// the user's most-played tracks), then apply a percentage boost if the artist
+// is one of the user's most-played artists.
 //
-//   artistAverage(ratings)         — straight mean of every rating
-//   artistWeightedAverage(ratings) — tiered top-K mean with caps that scale
-//                                    by sample size, so an artist with one
-//                                    5★ song can't outrank an artist with
-//                                    a deep catalog of bangers.
-//
-// Weighted tiers (count = number of rated songs):
-//   count ≤ 5    → mean of all ratings × 21/25  (effective cap ≈ 4.2)
-//   count ≤ 10   → mean of top 60%, capped at 4.6
-//   count ≤ 20   → mean of top 50%, capped at 5.0
-//   count >  20  → mean of top 10 songs,  capped at 5.0
+// Spotify caps /me/top/{artists,tracks} at 50 entries, so the highest tiers
+// here all live within that ceiling.
 
-export function artistAverage(ratings: number[]): number {
-  if (ratings.length === 0) return 0;
-  const sum = ratings.reduce((a, b) => a + b, 0);
-  return sum / ratings.length;
+export const STAR_POINTS: Record<number, number> = {
+  0: -2,
+  1: -1,
+  2: 1,
+  3: 2,
+  4: 5,
+  5: 10,
+};
+
+export function starPoints(stars: number): number {
+  return STAR_POINTS[stars] ?? 0;
 }
 
-export function artistWeightedAverage(ratings: number[]): number {
-  const n = ratings.length;
-  if (n === 0) return 0;
+// Per-song bonus when the rated track itself is one of the user's top tracks.
+// `rank` is 1-indexed; null/undefined = not in top list.
+export function trackRankBonus(rank: number | null | undefined): number {
+  if (rank == null) return 0;
+  if (rank <= 10) return 10;
+  if (rank <= 25) return 5;
+  if (rank <= 50) return 3;
+  return 0;
+}
 
-  if (n <= 5) {
-    return artistAverage(ratings) * (21 / 25);
-  }
+// Multiplier applied to the artist's total score when the artist is among the
+// user's top artists. Returns 1.0 when not in the top list.
+export function artistRankMultiplier(rank: number | null | undefined): number {
+  if (rank == null) return 1;
+  if (rank <= 1) return 1.15;
+  if (rank <= 5) return 1.10;
+  if (rank <= 15) return 1.075;
+  if (rank <= 30) return 1.05;
+  if (rank <= 50) return 1.025;
+  return 1;
+}
 
-  const sorted = [...ratings].sort((a, b) => b - a);
-  const topMean = (k: number) => {
-    const slice = sorted.slice(0, Math.max(1, k));
-    return slice.reduce((a, b) => a + b, 0) / slice.length;
-  };
+export type ScoredTrack = {
+  stars: number;          // 0..5
+  trackRank?: number | null; // 1-indexed position in user's top tracks, or null
+};
 
-  if (n <= 10) {
-    return Math.min(4.6, topMean(Math.ceil(n * 0.6)));
+export function artistScore(
+  tracks: ScoredTrack[],
+  artistRank: number | null | undefined,
+): number {
+  let base = 0;
+  for (const t of tracks) {
+    base += starPoints(t.stars) + trackRankBonus(t.trackRank);
   }
-  if (n <= 20) {
-    return Math.min(5, topMean(Math.ceil(n * 0.5)));
-  }
-  return Math.min(5, topMean(10));
+  return base * artistRankMultiplier(artistRank);
 }

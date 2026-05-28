@@ -2,11 +2,12 @@
   import { onMount } from 'svelte';
   import { page } from '$app/state';
   import { goto } from '$app/navigation';
-  import { ChevronLeft, Star } from '@lucide/svelte';
+  import { ChevronLeft, ChevronDown, Star } from '@lucide/svelte';
   import LibraryRow from '$lib/components/LibraryRow.svelte';
   import { getPlaybackStore } from '$lib/playback/player.svelte';
   import ShuffleButton from '$lib/components/ShuffleButton.svelte';
   import PremiumGate from '$lib/components/PremiumGate.svelte';
+  import { groupSongs } from '$lib/song-group';
 
   type Row = {
     uri: string;
@@ -15,6 +16,17 @@
     albumArtUrl: string | null;
     rating: number | null;
     labels: string[];
+    songFamilyId: string | null;
+    canonicalTitle: string | null;
+    primaryArtistId: string | null;
+    versionType: string | null;
+    album: string | null;
+  };
+
+  type SongGroup = {
+    key: string;
+    primary: Row;       // highest-rated version, shown collapsed
+    versions: Row[];    // all versions including primary, sorted by rating desc
   };
 
   type Sort = 'rating' | 'name';
@@ -47,14 +59,51 @@
   const playback = getPlaybackStore();
   const product = $derived(page.data.user?.product ?? 'open');
 
+  // Collapse same-song duplicates: e.g. "Hurt" (original) + "Hurt - Acoustic"
+  // share a row. Primary is the highest-rated version; variants live behind a tap.
+  const songGroups = $derived.by<SongGroup[]>(() => {
+    const partitioned = groupSongs(rows);
+    const out = partitioned.map((group, i) => {
+      const sorted = [...group].sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0));
+      const primary = sorted[0];
+      const key = primary.songFamilyId ?? `uri:${primary.uri}:${i}`;
+      return { key, primary, versions: sorted };
+    });
+    if (sort === 'name') {
+      out.sort((a, b) =>
+        (a.primary.title ?? '').toLowerCase().localeCompare((b.primary.title ?? '').toLowerCase()),
+      );
+    } else {
+      out.sort(
+        (a, b) =>
+          (b.primary.rating ?? 0) - (a.primary.rating ?? 0) ||
+          (a.primary.title ?? '').toLowerCase().localeCompare((b.primary.title ?? '').toLowerCase()),
+      );
+    }
+    return out;
+  });
+
+  // Tracks one song open at a time so the page doesn't explode when an artist
+  // has many multi-version songs.
+  let expandedKey = $state<string | null>(null);
+
   const stats = $derived.by(() => {
-    const rated = rows.filter((r) => r.rating != null && r.rating > 0);
-    const total = rated.length;
+    const ratedGroups = songGroups.filter(
+      (g) => g.primary.rating != null && g.primary.rating > 0,
+    );
+    const total = ratedGroups.length;
     if (total === 0) return { total: 0, avg: 0, fiveStars: 0 };
-    const sum = rated.reduce((a, r) => a + (r.rating ?? 0), 0);
-    const fiveStars = rated.filter((r) => r.rating === 5).length;
+    const sum = ratedGroups.reduce((a, g) => a + (g.primary.rating ?? 0), 0);
+    const fiveStars = ratedGroups.filter((g) => g.primary.rating === 5).length;
     return { total, avg: sum / total, fiveStars };
   });
+
+  function formatVersionLabel(v: Row): string {
+    if (v.versionType && v.versionType !== 'original') {
+      return v.versionType.replace(/_/g, ' ');
+    }
+    return v.album ?? 'Original';
+  }
 
   let inflight: AbortController | null = null;
 
@@ -91,8 +140,18 @@
     void goto(`/library/track/${encodeURIComponent(uri)}`);
   }
 
+  function onGroupClick(group: SongGroup) {
+    if (group.versions.length <= 1) {
+      onRowClick(group.primary.uri);
+      return;
+    }
+    expandedKey = expandedKey === group.key ? null : group.key;
+  }
+
   async function getCurrentFilterUris(): Promise<readonly string[]> {
-    return rows.map((r) => r.uri);
+    // Shuffle the primary (highest-rated) version of each song — avoids the
+    // queue containing "Hurt" + "Hurt - Acoustic" + "Hurt - Live" back to back.
+    return songGroups.map((g) => g.primary.uri);
   }
 
   function setSort(next: Sort) {
@@ -178,12 +237,70 @@
         </div>
       {/each}
     </div>
-  {:else if rows.length === 0}
+  {:else if songGroups.length === 0}
     <p class="py-8 text-center text-sm opacity-60">No tracks from this artist in your library.</p>
   {:else}
     <div class="flex flex-col gap-2">
-      {#each rows as row (row.uri)}
-        <LibraryRow {row} onclick={onRowClick} isPlaying={playback.state.track?.uri === row.uri} />
+      {#each songGroups as group (group.key)}
+        {@const expanded = expandedKey === group.key}
+        {@const multi = group.versions.length > 1}
+        {@const playingInGroup = group.versions.some((v) => playback.state.track?.uri === v.uri)}
+        <div class="flex flex-col gap-1">
+          <LibraryRow
+            row={group.primary}
+            onclick={() => onGroupClick(group)}
+            isPlaying={playingInGroup}
+          />
+
+          {#if multi}
+            <button
+              type="button"
+              data-testid="versions-toggle"
+              aria-expanded={expanded}
+              onclick={() => (expandedKey = expanded ? null : group.key)}
+              class="ml-[4.25rem] flex w-fit items-center gap-1 self-start rounded-full px-2 py-0.5 text-[10px] font-medium text-white/55 transition-colors hover:bg-white/[0.06] hover:text-white"
+            >
+              <ChevronDown class="size-3 transition-transform {expanded ? 'rotate-180' : ''}" />
+              {group.versions.length} versions
+            </button>
+          {/if}
+
+          {#if multi && expanded}
+            <div class="ml-[4.25rem] flex flex-col gap-1 border-l border-white/10 pl-3">
+              {#each group.versions as v (v.uri)}
+                <button
+                  type="button"
+                  data-testid="song-version"
+                  data-uri={v.uri}
+                  onclick={() => onRowClick(v.uri)}
+                  class="flex items-center gap-2 rounded-lg bg-white/[0.03] p-2 text-left text-xs transition-colors hover:bg-white/[0.07]"
+                >
+                  {#if v.albumArtUrl}
+                    <img
+                      src={v.albumArtUrl}
+                      alt=""
+                      class="size-9 flex-shrink-0 rounded-md object-cover shadow shadow-black/40"
+                    />
+                  {:else}
+                    <div class="size-9 flex-shrink-0 rounded-md bg-white/10 shadow shadow-black/40" aria-hidden="true"></div>
+                  {/if}
+                  <div class="min-w-0 flex-1">
+                    <div class="truncate font-medium {playback.state.track?.uri === v.uri ? 'text-spotify-green' : 'text-white/90'}">
+                      {v.title ?? 'Unknown'}
+                    </div>
+                    <div class="truncate text-[10px] text-white/45">{formatVersionLabel(v)}</div>
+                  </div>
+                  {#if v.rating != null && v.rating > 0}
+                    <span class="flex flex-shrink-0 items-center gap-0.5 text-spotify-green">
+                      <Star class="size-3 fill-current" />
+                      <span class="text-xs font-bold tabular-nums">{v.rating}</span>
+                    </span>
+                  {/if}
+                </button>
+              {/each}
+            </div>
+          {/if}
+        </div>
       {/each}
     </div>
   {/if}

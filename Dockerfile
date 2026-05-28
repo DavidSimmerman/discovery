@@ -64,4 +64,8 @@ COPY --from=build /app/scripts/docker-entrypoint.sh ./scripts/docker-entrypoint.
 RUN chmod +x ./scripts/docker-entrypoint.sh
 
 EXPOSE 3000
+
+HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=3 \
+  CMD wget -qO- http://127.0.0.1:3000/api/health >/dev/null || exit 1
+
 ENTRYPOINT ["./scripts/docker-entrypoint.sh"]

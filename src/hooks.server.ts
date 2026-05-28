@@ -14,6 +14,7 @@ export const handle: Handle = async ({ event, resolve }) => {
           spotifyId: row[0].spotifyId,
           displayName: row[0].displayName,
           product: row[0].product as 'premium' | 'free' | 'open',
+          needsReauth: row[0].needsReauth ?? false,
         }
       : null;
   } else {

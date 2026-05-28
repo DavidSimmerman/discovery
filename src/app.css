@@ -15,3 +15,9 @@ button {
   -webkit-appearance: none;
   appearance: none;
 }
+
+/* iOS Safari auto-zooms when focusing an input whose font-size is below 16px.
+   Force the minimum on all text-entry controls to suppress that zoom. */
+input, select, textarea {
+  font-size: 16px;
+}

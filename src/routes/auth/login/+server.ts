@@ -4,8 +4,12 @@ import { generatePkce } from '$lib/server/pkce';
 import { SPOTIFY_CLIENT_ID } from '$env/static/private';
 import { PUBLIC_BASE_URL } from '$env/static/public';
 
+// Playback happens on the user's own Spotify devices (phone, desktop app,
+// browser tab) via Spotify Connect — disccovery is a remote control, never
+// the audio source. So we don't request the `streaming` scope that the Web
+// Playback SDK requires; user-modify-playback-state is enough to control
+// whatever device is active.
 const SCOPES = [
-  'streaming',
   'user-read-email',
   'user-read-private',
   'user-read-playback-state',
@@ -13,6 +17,7 @@ const SCOPES = [
   'user-read-currently-playing',
   'user-read-recently-played',
   'user-library-read',
+  'user-top-read',
 ].join(' ');
 
 export const GET: RequestHandler = async ({ cookies }) => {

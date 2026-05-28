@@ -5,65 +5,16 @@
   import LabelChips from '$lib/components/LabelChips.svelte';
   import Transport from '$lib/components/Transport.svelte';
   import Scrubber from '$lib/components/Scrubber.svelte';
-  import VolumeSlider from '$lib/components/VolumeSlider.svelte';
-  import ContinueHereButton from '$lib/components/ContinueHereButton.svelte';
   import ShuffleButton from '$lib/components/ShuffleButton.svelte';
   import PremiumGate from '$lib/components/PremiumGate.svelte';
+  import OtherVersions from '$lib/components/OtherVersions.svelte';
   import { getPlaybackStore } from '$lib/playback/player.svelte';
 
-  type Playing = {
-    uri: string;
-    name: string;
-    artists: string[];
-    album: string | null;
-    albumArtUrl: string | null;
-    durationMs: number;
-    progressMs: number | null;
-    isPlaying: boolean;
-    isrc: string | null;
-    contextUri?: string | null;
-  };
-
-  const POLL_MS = 5000;
   const playback = getPlaybackStore();
   const product = $derived(page.data.user?.product ?? 'open');
 
-  let loading = $state(true);
-  let playing = $state<Playing | null>(null);
-  let rating = $state<number | null>(null);
   let error = $state<string | null>(null);
-
-  let interval: ReturnType<typeof setInterval> | null = null;
   let errorTimer: ReturnType<typeof setTimeout> | null = null;
-
-  async function poll() {
-    if (playback.isActive) return; // SDK is the source of truth
-    try {
-      const res = await fetch('/api/spotify/currently-playing');
-      if (!res.ok) { loading = false; return; }
-      const data = await res.json();
-      if (data.playing == null) {
-        playing = null;
-        rating = null;
-      } else {
-        playing = data.playing;
-        rating = data.rating ?? null;
-      }
-    } catch { /* keep last good */ }
-    finally { loading = false; }
-  }
-
-  function startPolling() {
-    if (interval !== null) return;
-    interval = setInterval(poll, POLL_MS);
-  }
-  function stopPolling() {
-    if (interval !== null) { clearInterval(interval); interval = null; }
-  }
-  function onVisibilityChange() {
-    if (document.visibilityState === 'hidden') stopPolling();
-    else { poll(); startPolling(); }
-  }
 
   function setError(msg: string) {
     error = msg;
@@ -76,12 +27,11 @@
   }
 
   async function handleRate(next: number) {
-    // Resolve the URI from whichever source is authoritative.
-    const uri = playback.isActive ? playback.state.track?.uri : playing?.uri;
-    const isrc = playing?.isrc ?? undefined;
+    const uri = playback.state.track?.uri;
     if (!uri) return;
-    const prev = rating;
-    rating = next;
+    const isrc = playback.state.isrc ?? undefined;
+    const prev = playback.currentRating;
+    playback.setCurrentRating(uri, next === 0 ? null : next);
     try {
       const res =
         next === 0
@@ -96,50 +46,14 @@
               body: JSON.stringify({ spotifyTrackUri: uri, ratingStars: next, isrc }),
             });
       if (!res.ok) {
-        rating = prev;
+        playback.setCurrentRating(uri, prev);
         setError("Couldn't save your rating. Try again.");
         return;
       }
       clearError();
-      playback.setCurrentRating(uri, next === 0 ? null : next);
     } catch {
-      rating = prev;
+      playback.setCurrentRating(uri, prev);
       setError("Couldn't save your rating. Check your connection.");
-    }
-  }
-
-  // Remote control of whichever Spotify device is currently active (when
-  // disccovery isn't the audio source). Optimistically flips local state and
-  // refreshes from the API so the UI doesn't wait for the next 5s poll.
-  async function remoteControl(
-    action: 'pause' | 'resume' | 'next' | 'previous' | 'seek',
-    positionMs?: number,
-  ) {
-    if (!playing) return;
-    const prev = playing;
-    if (action === 'pause') playing = { ...prev, isPlaying: false };
-    else if (action === 'resume') playing = { ...prev, isPlaying: true };
-    else if (action === 'seek' && typeof positionMs === 'number') {
-      playing = { ...prev, progressMs: positionMs };
-    }
-    try {
-      const res = await fetch('/api/spotify/player/control', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ action, position_ms: positionMs }),
-      });
-      if (!res.ok) {
-        playing = prev;
-        if (res.status === 402) setError('Premium required to control playback.');
-        else if (res.status === 409) setError('No active Spotify device found.');
-        else setError("Couldn't control Spotify. Try again.");
-        return;
-      }
-      // Give Spotify a moment to apply the action, then re-poll for truth.
-      setTimeout(() => { void poll(); }, 300);
-    } catch {
-      playing = prev;
-      setError("Couldn't reach Spotify. Check your connection.");
     }
   }
 
@@ -151,42 +65,36 @@
   }
 
   onMount(() => {
-    poll();
-    startPolling();
-    document.addEventListener('visibilitychange', onVisibilityChange);
+    playback.init();
     return () => {
-      stopPolling();
-      document.removeEventListener('visibilitychange', onVisibilityChange);
       if (errorTimer !== null) clearTimeout(errorTimer);
     };
   });
 
-  // Keep the rating in sync with the SDK's current track when disccovery owns audio.
-  // Derive the URI only so the effect doesn't re-run on every position tick.
-  const activeUri = $derived(playback.isActive ? (playback.state.track?.uri ?? null) : null);
-  $effect(() => {
-    const uri = activeUri;
-    if (!uri) return;
-    fetch(`/api/ratings?uri=${encodeURIComponent(uri)}`).then(async (r) => {
-      if (!r.ok) return;
-      const j = (await r.json()) as { ratingStars: number | null };
-      rating = j.ratingStars;
-      playback.setCurrentRating(uri, j.ratingStars);
-    }).catch(() => {});
-  });
-
-  // The currently displayed album art URL — drives the blurred-art backdrop so
-  // the screen shifts colour with the track.
   const backdropUrl = $derived(
-    playback.isActive && playback.state.track
-      ? (playback.state.track.album.images[0]?.url ?? null)
-      : (playing?.albumArtUrl ?? null),
+    playback.state.track?.album.images[0]?.url ?? null,
+  );
+
+  // The store is the single source of truth — build the NowPlaying view-model
+  // from playback.state so all reactivity flows through the store.
+  const playingForView = $derived(
+    playback.state.track
+      ? {
+          uri: playback.state.track.uri,
+          name: playback.state.track.name,
+          artists: playback.state.track.artists.map((a) => a.name),
+          album: playback.state.track.album.name || null,
+          albumArtUrl: playback.state.track.album.images[0]?.url ?? null,
+          durationMs: playback.state.duration_ms,
+          progressMs: playback.state.position_ms,
+          isPlaying: !playback.state.paused,
+          isrc: playback.state.isrc,
+        }
+      : null,
   );
 </script>
 
 <main class="relative flex min-h-screen flex-col items-center justify-center gap-6 p-6 pb-32">
-  <!-- Blurred album-art backdrop — sits behind everything, dimmed to keep text legible.
-       The wrapper clips the scaled/blurred image so we can still scroll the main content. -->
   {#if backdropUrl}
     <div aria-hidden="true" class="pointer-events-none absolute inset-0 -z-10 overflow-hidden">
       <div
@@ -197,24 +105,14 @@
     </div>
   {/if}
 
-  {#if playback.isActive && playback.state.track}
-    <!-- disccovery is the audio source: show SDK state + transport. -->
-    <NowPlaying
-      playing={{
-        uri: playback.state.track.uri,
-        name: playback.state.track.name,
-        artists: playback.state.track.artists.map((a) => a.name),
-        album: playback.state.track.album.name,
-        albumArtUrl: playback.state.track.album.images[0]?.url ?? null,
-        durationMs: playback.state.duration_ms,
-        progressMs: playback.state.position_ms,
-        isPlaying: !playback.state.paused,
-        isrc: null,
-      }}
-      {rating}
-      loading={false}
-      onrate={handleRate}
-    />
+  <NowPlaying
+    playing={playingForView}
+    rating={playback.currentRating}
+    loading={!playback.isReady && !playback.isActive}
+    onrate={handleRate}
+  />
+
+  {#if playingForView}
     <PremiumGate {product}>
       <Scrubber
         positionMs={playback.state.position_ms}
@@ -228,40 +126,12 @@
         onnext={() => playback.next()}
         onprev={() => playback.prev()}
       />
-      <VolumeSlider store={playback} />
     </PremiumGate>
-    <LabelChips trackUri={playback.state.track.uri} />
-  {:else}
-    <!-- Spotify-elsewhere or nothing playing. -->
-    <NowPlaying {playing} {rating} {loading} onrate={handleRate} />
+    <LabelChips trackUri={playingForView.uri} />
 
-    {#if playing}
-      <!-- Remote-control of Spotify-elsewhere: not behind PremiumGate. Spotify's
-           player API is premium-only and will 402 for free accounts — surfaced
-           via the error banner — but we don't want to pre-disable for users
-           whose `product` field is stale (e.g. upgraded after auth callback). -->
-      <Scrubber
-        positionMs={playing.progressMs ?? 0}
-        durationMs={playing.durationMs}
-        paused={!playing.isPlaying}
-        onseek={(ms) => remoteControl('seek', ms)}
-      />
-      <Transport
-        paused={!playing.isPlaying}
-        ontoggle={() => remoteControl(playing!.isPlaying ? 'pause' : 'resume')}
-        onnext={() => remoteControl('next')}
-        onprev={() => remoteControl('previous')}
-      />
-      <PremiumGate {product}>
-        <ContinueHereButton
-          store={playback}
-          contextUri={playing.contextUri ?? null}
-          trackUri={playing.uri}
-          positionMs={playing.progressMs ?? 0}
-        />
-      </PremiumGate>
-      <LabelChips trackUri={playing.uri} />
-    {/if}
+    <div class="w-full max-w-md">
+      <OtherVersions trackUri={playingForView.uri} currentUri={playingForView.uri} />
+    </div>
   {/if}
 
   <PremiumGate {product}>
@@ -274,8 +144,11 @@
 
   <div aria-live="polite" class="min-h-5 text-sm text-red-400">
     {#if error}{error}{/if}
-    {#if playback.error === 'premium'}Premium required to play in disccovery.{/if}
-    {#if playback.error === 'unsupported'}Playback unavailable in this browser.{/if}
-    {#if playback.error === 'transient'}Playback hiccup — try again.{/if}
+    {#if playback.error === 'no_device'}
+      Open Spotify on a phone, desktop, or browser to start playback.
+    {/if}
+    {#if playback.error === 'premium'}Premium required to control Spotify playback.{/if}
+    {#if playback.error === 'transient'}Connection hiccup — try again.{/if}
+    {#if playback.error === 'auth'}Session expired — log in again.{/if}
   </div>
 </main>

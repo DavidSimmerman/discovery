@@ -7,6 +7,7 @@
   import Scrubber from '$lib/components/Scrubber.svelte';
   import ShuffleButton from '$lib/components/ShuffleButton.svelte';
   import PremiumGate from '$lib/components/PremiumGate.svelte';
+  import OtherVersions from '$lib/components/OtherVersions.svelte';
   import { getPlaybackStore } from '$lib/playback/player.svelte';
 
   const playback = getPlaybackStore();
@@ -127,6 +128,10 @@
       />
     </PremiumGate>
     <LabelChips trackUri={playingForView.uri} />
+
+    <div class="w-full max-w-md">
+      <OtherVersions trackUri={playingForView.uri} currentUri={playingForView.uri} />
+    </div>
   {/if}
 
   <PremiumGate {product}>

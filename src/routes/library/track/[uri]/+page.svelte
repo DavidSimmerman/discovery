@@ -5,6 +5,7 @@
   import StarRating from '$lib/components/StarRating.svelte';
   import LabelChips from '$lib/components/LabelChips.svelte';
   import PremiumGate from '$lib/components/PremiumGate.svelte';
+  import OtherVersions from '$lib/components/OtherVersions.svelte';
   import { getPlaybackStore } from '$lib/playback/player.svelte';
 
   type Track = {
@@ -119,4 +120,6 @@
   <div aria-live="polite" class="min-h-5 text-sm text-red-400">
     {#if error}{error}{/if}
   </div>
+
+  <OtherVersions trackUri={data.track.uri} currentUri={data.track.uri} />
 </main>

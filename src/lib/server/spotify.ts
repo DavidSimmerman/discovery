@@ -235,3 +235,18 @@ export async function searchTrack(
   const item = json.tracks?.items?.[0];
   return item?.uri ?? null;
 }
+
+// Multi-result search. `query` is a raw Spotify search expression — the caller
+// builds it (e.g. `track:"..." artist:"..."` for an artist-scoped search, or
+// just `track:"..."` to surface cross-artist results).
+export async function searchTracks(
+  accessToken: string,
+  query: string,
+  limit = 50,
+): Promise<SpotifyTrack[]> {
+  const url = `https://api.spotify.com/v1/search?type=track&limit=${limit}&q=${encodeURIComponent(query)}`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+  if (!res.ok) return [];
+  const json = await res.json();
+  return ((json.tracks?.items ?? []) as SpotifyTrack[]).filter(Boolean);
+}

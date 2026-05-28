@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte';
+  import { onDestroy, untrack } from 'svelte';
 
   type Props = {
     positionMs: number;
@@ -19,13 +19,31 @@
   let dragging = $state(false);
   let dragValue = $state(0);
 
-  // Re-anchor when upstream position or play-state changes. Read deps explicitly
-  // so the effect doesn't fire on every `now` tick.
+  // A poll's reported position often lags the value we've already extrapolated
+  // to. Snapping straight to it makes the bar jump backward. So for small
+  // discrepancies we re-anchor *forward-only*; only a large delta (a real seek
+  // or a track change, which resets position toward 0) snaps to the new value.
+  const REANCHOR_THRESHOLD_MS = 2500;
+
+  // Re-anchor when upstream position or play-state changes. anchor reads/writes
+  // are untracked so the effect depends only on positionMs/paused, not itself.
   $effect(() => {
-    // eslint-disable-next-line @typescript-eslint/no-unused-expressions
-    positionMs; paused;
-    anchorPos = positionMs;
-    anchorAt = performance.now();
+    const incoming = positionMs;
+    const isPaused = paused;
+    untrack(() => {
+      const t = performance.now();
+      if (isPaused) {
+        anchorPos = incoming;
+        anchorAt = t;
+        return;
+      }
+      const extrapolated = anchorPos + (t - anchorAt);
+      anchorPos =
+        Math.abs(incoming - extrapolated) > REANCHOR_THRESHOLD_MS
+          ? incoming // seek or track change — honor it (forward or back)
+          : Math.max(incoming, extrapolated); // minor poll drift — never rewind
+      anchorAt = t;
+    });
   });
 
   let raf: number | null = null;
@@ -67,6 +85,10 @@
   function onChange(e: Event) {
     const v = Number((e.currentTarget as HTMLInputElement).value);
     dragging = false;
+    // Hard-anchor to the seek target so the forward-only re-anchor logic
+    // doesn't swallow a small backward seek as if it were poll drift.
+    anchorPos = v;
+    anchorAt = performance.now();
     void onseek(v);
   }
 </script>

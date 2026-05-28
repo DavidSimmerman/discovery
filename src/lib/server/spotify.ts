@@ -239,12 +239,19 @@ export async function searchTrack(
 // Multi-result search. `query` is a raw Spotify search expression — the caller
 // builds it (e.g. `track:"..." artist:"..."` for an artist-scoped search, or
 // just `track:"..."` to surface cross-artist results).
+//
+// NOTE: Spotify's search `limit` is capped at 10 — anything higher returns
+// `400 Invalid limit`. We clamp here so callers can't silently zero out their
+// results by asking for more.
+export const SEARCH_LIMIT_MAX = 10;
+
 export async function searchTracks(
   accessToken: string,
   query: string,
-  limit = 50,
+  limit = SEARCH_LIMIT_MAX,
 ): Promise<SpotifyTrack[]> {
-  const url = `https://api.spotify.com/v1/search?type=track&limit=${limit}&q=${encodeURIComponent(query)}`;
+  const clamped = Math.max(1, Math.min(SEARCH_LIMIT_MAX, limit));
+  const url = `https://api.spotify.com/v1/search?type=track&limit=${clamped}&q=${encodeURIComponent(query)}`;
   const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
   if (!res.ok) return [];
   const json = await res.json();

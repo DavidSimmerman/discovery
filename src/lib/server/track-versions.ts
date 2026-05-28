@@ -179,14 +179,15 @@ async function findCatalogVersions(
 ): Promise<VersionEntry[]> {
   if (source.artists.length === 0) return [];
   const { access_token } = await getValidAccessToken(userId);
-  // Scoped search: <canonical title> + primary artist. Skipping quote chars
-  // because Spotify's parser is finicky and the canonical is already clean.
+  // Scoped search: <canonical title> + primary artist. Fields MUST be quoted —
+  // an unquoted `track:a b c` only binds the first token to the filter and
+  // treats the rest as free text, which returns junk or nothing.
   const sanitize = (s: string) => s.replace(/["()[\]{}]/g, ' ').replace(/\s+/g, ' ').trim();
-  const q = `track:${sanitize(source.canonicalTitle)} artist:${sanitize(source.artists[0])}`;
+  const q = `track:"${sanitize(source.canonicalTitle)}" artist:"${sanitize(source.artists[0])}"`;
 
   let results: SpotifyTrack[];
   try {
-    results = await searchTracks(access_token, q, 50);
+    results = await searchTracks(access_token, q, 10);
   } catch {
     return [];
   }

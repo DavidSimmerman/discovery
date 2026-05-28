@@ -247,13 +247,14 @@ export async function findTrackVersions(
   const excludeUris = new Set<string>([source.uri, ...library.map((v) => v.uri)]);
   const catalog = await findCatalogVersions(userId, source, excludeUris);
 
-  // Sort library by rating desc then title; catalog by title.
+  // Library: rating desc, then title. Catalog is left in Spotify's search
+  // relevance order — track `popularity` was removed from the API (Feb 2026
+  // migration), and relevance is the best available popularity proxy.
   library.sort(
     (a, b) =>
       (b.rating ?? 0) - (a.rating ?? 0) ||
       a.title.toLowerCase().localeCompare(b.title.toLowerCase()),
   );
-  catalog.sort((a, b) => a.title.toLowerCase().localeCompare(b.title.toLowerCase()));
 
   return {
     source: {

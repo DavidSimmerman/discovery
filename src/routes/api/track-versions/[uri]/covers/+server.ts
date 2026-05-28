@@ -161,10 +161,11 @@ export const GET: RequestHandler = async ({ locals, params }) => {
     });
   };
 
-  // MB-backed per-artist hits first (highest confidence), then title-search
-  // supplements for anything MB missed.
-  for (const t of perArtist) if (t) consider(t);
+  // Title-search hits first — Spotify returns these in relevance order, which
+  // is the best popularity proxy now that track `popularity` is gone (Feb 2026
+  // API migration). Then per-artist hits for covers the title search missed.
   for (const t of titleHits) consider(t);
+  for (const t of perArtist) if (t) consider(t);
 
   return json({ covers }, { headers: { 'cache-control': 'no-store' } });
 };

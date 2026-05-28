@@ -202,7 +202,7 @@
     {#if catalog.length > 0}
       <div class="flex flex-col gap-1.5">
         <h2 class="text-xs font-semibold uppercase tracking-wide text-white/50">
-          Catalog versions
+          Other versions
         </h2>
         {#each catalog as v (v.uri)}
           {@const playingHere = playback.state.track?.uri === v.uri}

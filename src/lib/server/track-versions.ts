@@ -113,6 +113,13 @@ async function findLibraryVersions(
 ): Promise<VersionEntry[]> {
   if (source.artists.length === 0) return [];
 
+  // Build a real text[] literal (ARRAY[$1, $2, …]). Interpolating the JS array
+  // directly compiles to a row expression `($1, $2)`, which `&&` can't use.
+  const artistsArray = sql`ARRAY[${sql.join(
+    source.artists.map((a) => sql`${a}`),
+    sql`, `,
+  )}]::text[]`;
+
   const rows = await db.execute<LibraryVersionRow>(sql`
     SELECT
       t.spotify_track_uri AS uri,
@@ -128,7 +135,7 @@ async function findLibraryVersions(
     JOIN tracks t ON t.spotify_track_uri = r.spotify_track_uri
     WHERE r.user_id = ${userId}
       AND t.spotify_track_uri <> ${source.uri}
-      AND t.artists && ${source.artists}::text[]
+      AND t.artists && ${artistsArray}
   `);
 
   const sourceGroupable: Groupable = {

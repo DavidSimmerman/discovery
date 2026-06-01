@@ -21,6 +21,8 @@ function makeStore(active: boolean) {
     destroy: vi.fn(),
     playTrack: vi.fn(),
     shuffle: vi.fn(),
+    startSampler: vi.fn(),
+    isSampling: false,
     togglePlay: vi.fn(),
     next: vi.fn(),
     prev: vi.fn(),

@@ -22,20 +22,14 @@
     }
   });
 
-  async function pickFromSampler(): Promise<string | null> {
-    const res = await fetch('/api/shuffle/next', { method: 'POST' });
-    if (!res.ok) return null;
-    const j = (await res.json()) as { uri: string | null };
-    return j.uri;
-  }
-
   async function onClick() {
     if (loading) return;
     loading = true;
     try {
       if (useSampler) {
-        const uri = await pickFromSampler();
-        if (uri) await store.playTrack(uri, [uri]);
+        // Sampler mode plays one pick and then keeps Spotify's queue topped up,
+        // so playback advances automatically without further clicks.
+        await store.startSampler();
         return;
       }
       const uris = await getUris();

@@ -217,26 +217,77 @@ export type PickInput = {
   rng: () => number;
 };
 
+// Progressive relaxation (spec §5). When strict gating leaves nothing eligible
+// — the common cause being a library smaller than the cooldown window, where
+// every track is "recently played" — we loosen gates in a fixed order until
+// something passes, rather than stalling. Each step is cumulative.
+//
+// We deliberately do NOT relax weight=0 filters or tier weights: those are the
+// user's explicit "never play this" choices, and silently overriding them would
+// surprise. A library of only excluded tracks correctly yields null.
+export type Relaxation = 'none' | 'drop_daily_cap' | 'halve_cooldowns' | 'drop_cooldowns';
+
+const RELAX_ORDER: Relaxation[] = ['drop_daily_cap', 'halve_cooldowns', 'drop_cooldowns'];
+
+function relaxConfig(cfg: SamplerConfig, level: Relaxation): SamplerConfig {
+  // Cumulative: each level includes the loosening of the levels before it.
+  const gates = { ...cfg.gates };
+  if (level === 'drop_daily_cap' || level === 'halve_cooldowns' || level === 'drop_cooldowns') {
+    gates.dailyCap = { ...gates.dailyCap, enabled: false };
+  }
+  if (level === 'halve_cooldowns') {
+    gates.cooldownCount = { ...gates.cooldownCount, n: Math.floor(gates.cooldownCount.n / 2) };
+    gates.cooldownTime = { ...gates.cooldownTime, hours: gates.cooldownTime.hours / 2 };
+  }
+  if (level === 'drop_cooldowns') {
+    gates.cooldownCount = { ...gates.cooldownCount, enabled: false };
+    gates.cooldownTime = { ...gates.cooldownTime, enabled: false };
+  }
+  return { ...cfg, gates };
+}
+
 export type PickResult = {
   uri: string | null;
   debug?: {
     poolSize: number;
     eligibleSize: number;
     winnerScore: number;
+    relaxed: Relaxation;
   };
 };
+
+// Below this, a weight is treated as a floor rather than a true zero. Only used
+// after relaxation: a track played 0 picks ago has recency multiplier 0, which
+// would make it unsamplable even though we just relaxed gates specifically to
+// allow replaying it. The floor keeps it pickable while recency still *orders*
+// the pool (older plays outrank newer ones).
+const RELAXED_WEIGHT_FLOOR = 1e-6;
 
 export function pickNext(input: PickInput): PickResult {
   const { candidates, state, config, now, rng } = input;
   const mixed = applyMixSplit(candidates, config);
-  const eligible = mixed.filter((c) => gateOk(c, state, config, now));
-  if (eligible.length === 0) {
-    return { uri: null, debug: { poolSize: candidates.length, eligibleSize: 0, winnerScore: 0 } };
+
+  let eligible = mixed.filter((c) => gateOk(c, state, config, now));
+  let relaxed: Relaxation = 'none';
+  let activeConfig = config;
+  for (let i = 0; eligible.length === 0 && i < RELAX_ORDER.length; i++) {
+    relaxed = RELAX_ORDER[i];
+    activeConfig = relaxConfig(config, relaxed);
+    eligible = mixed.filter((c) => gateOk(c, state, activeConfig, now));
   }
+
+  if (eligible.length === 0) {
+    return {
+      uri: null,
+      debug: { poolSize: candidates.length, eligibleSize: 0, winnerScore: 0, relaxed },
+    };
+  }
+
+  const floor = relaxed === 'none' ? 0 : RELAXED_WEIGHT_FLOOR;
   const scored = eligible.map((c) => {
-    const b = baseScore(c, config);
-    const r = recencyMultiplier(c, state, config);
-    return { uri: c.uri, weight: b * r };
+    const b = baseScore(c, activeConfig);
+    const r = recencyMultiplier(c, state, activeConfig);
+    return { uri: c.uri, weight: Math.max(b * r, b > 0 ? floor : 0) };
   });
   const winner = weightedSample(scored, rng);
   const winnerScore = winner ? (scored.find((s) => s.uri === winner)?.weight ?? 0) : 0;
@@ -246,6 +297,7 @@ export function pickNext(input: PickInput): PickResult {
       poolSize: candidates.length,
       eligibleSize: eligible.length,
       winnerScore,
+      relaxed,
     },
   };
 }

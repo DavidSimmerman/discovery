@@ -263,9 +263,14 @@ describe('pickNext (integration)', () => {
     expect(result.uri).toBe('fresh');
   });
 
-  it('returns null when no candidates pass gates', () => {
+  it('relaxes cooldowns rather than stalling on a fully-cooled small library', () => {
+    // Library smaller than the cooldown window: all tracks are inside it, so
+    // strict gating would return null. Relaxation must keep music playing.
     const pool = [cand('only', '5')];
-    const state = emptyState({ recentlyPlayed: ['only'] });
+    const state = emptyState({
+      recentlyPlayed: ['only'],
+      recentlyPlayedAt: { only: NOW - 60_000 }, // 1 min ago, inside 6h time cooldown too
+    });
     const result = pickNext({
       candidates: pool,
       state,
@@ -273,7 +278,52 @@ describe('pickNext (integration)', () => {
       now: NOW,
       rng: rng(1),
     });
+    expect(result.uri).toBe('only');
+    expect(result.debug?.relaxed).toBe('drop_cooldowns');
+  });
+
+  it('prefers the least-recently-played track when relaxing', () => {
+    // Both inside the cooldown window; 'older' was played longer ago, so once
+    // cooldowns relax, recency damping should still favor it over 'newer'.
+    const pool = [cand('newer', '5'), cand('older', '5')];
+    const state = emptyState({
+      recentlyPlayed: ['newer', 'older'], // newer is index 0 (most recent)
+    });
+    const result = pickNext({
+      candidates: pool,
+      state,
+      config: defaultConfig(),
+      now: NOW,
+      rng: rng(1),
+    });
+    expect(result.uri).toBe('older');
+    expect(result.debug?.relaxed).not.toBe('none');
+  });
+
+  it('still returns null when weight=0 filters exclude everything', () => {
+    // Relaxation drops cooldowns, not intentional excludes. A library of only
+    // tier-1 tracks (weight 0) stays empty — that is the user's explicit filter.
+    const pool = [cand('a', '1'), cand('b', '1')];
+    const result = pickNext({
+      candidates: pool,
+      state: emptyState(),
+      config: defaultConfig(),
+      now: NOW,
+      rng: rng(1),
+    });
     expect(result.uri).toBeNull();
+  });
+
+  it('reports relaxed: none on a healthy pick', () => {
+    const pool = [cand('a', '5'), cand('b', '4')];
+    const result = pickNext({
+      candidates: pool,
+      state: emptyState(),
+      config: defaultConfig(),
+      now: NOW,
+      rng: rng(1),
+    });
+    expect(result.debug?.relaxed).toBe('none');
   });
 
   it('produces debug scores on the returned candidate', () => {

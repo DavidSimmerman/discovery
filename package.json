@@ -16,6 +16,8 @@
 		"db:migrate:prod": "node scripts/migrate.mjs",
 		"db:push": "drizzle-kit push",
 		"db:studio": "drizzle-kit studio",
+		"library:export": "node scripts/library-transfer.mjs export",
+		"library:import": "node scripts/library-transfer.mjs import",
 		"test": "vitest run",
 		"test:watch": "vitest",
 		"e2e": "playwright test --project=e2e",

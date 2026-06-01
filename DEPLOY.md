@@ -113,3 +113,39 @@ docker run --rm -p 3000:3000 \
   -e NODE_ENV=production \
   disccovery
 ```
+
+## Syncing the prod library into local dev
+
+`scripts/library-transfer.mjs` (wrappers: `pnpm library:export` / `pnpm library:import`)
+copies a user's taste data — ratings, labels, track-labels, plus the referenced
+`tracks` / `artists` / `track_artists` rows — between databases. It does NOT touch
+plays, shuffle state, AI suggestions, top lists, users, or Spotify tokens. Import
+is idempotent, transactional, additive (upsert — it never deletes local rows), and
+re-points everything at the target DB's user.
+
+**Reaching prod from a dev machine on the LAN.** Prod Postgres runs as the
+`discovery-db` Coolify resource. It is *not* reachable over the WAN (only the app
+is, via the Cloudflare tunnel), but with "Make it publicly available" enabled
+Coolify binds it on the host's public port, reachable on the **LAN** at
+`<coolify-host-LAN-IP>:<public-port>` (currently `192.168.1.56:3160`; the Coolify
+UI is at `http://192.168.1.56:8000`).
+
+Grab the full connection string from Coolify → `discovery-db` → **Postgres URL
+(public)** — it contains the password, so pass it inline via `--db` and never
+commit it. Prod has more than one user, so select yours by Spotify ID.
+
+```sh
+# 1. Export your prod library to a file (paste the public URL from Coolify)
+pnpm library:export \
+  --db 'postgres://postgres:<PASSWORD>@192.168.1.56:3160/postgres' \
+  --user 313e7xmyj7jaq6cjrlpsmewfsona \
+  --out /tmp/prod-lib.json
+
+# 2. Load it into local dev (uses .env's DATABASE_URL)
+pnpm library:import /tmp/prod-lib.json --user 313e7xmyj7jaq6cjrlpsmewfsona
+
+# Preview without writing: add --dry-run to the import.
+```
+
+When done, untick "Make it publicly available" in Coolify if you don't want the
+DB exposed on the LAN, and rotate the password if the URL leaked anywhere.

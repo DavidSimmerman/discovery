@@ -36,6 +36,13 @@ export type SamplerState = {
   dailyResetAt: number;
 };
 
+// What we actually persist in shuffleSessions.state. The sampler logic only
+// touches SamplerState; the virtual playback timeline lives alongside it so
+// load/save is one DB round-trip. The timeline field is optional so rows
+// written by older builds load cleanly (callers default it to emptyTimeline()).
+import type { Timeline } from './timeline';
+export type SessionState = SamplerState & { timeline?: Timeline };
+
 type CurveKind = 'linear' | 'exp' | 'log';
 
 export type RecencyCurve = {

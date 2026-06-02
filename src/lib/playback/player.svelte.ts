@@ -11,19 +11,46 @@
 import { getContext, setContext } from 'svelte';
 import { browser } from '$app/environment';
 import { buildQueueFromClick, shuffleFisherYates } from './queue';
+import type { Timeline } from '$lib/server/shuffle/timeline';
 
 const KEY = Symbol('playback');
 
-// Pure transition test for sampler auto-advance, extracted so it can be unit
-// tested without the rune machinery. We top up the queue exactly when the track
-// we previously queued has become the current track — i.e. Spotify advanced
-// into our pick. Pulled out here to keep the intent obvious and verified.
-export function shouldQueueNextPick(
-  isSampling: boolean,
-  queuedUri: string | null,
+// Pre-queue lead: when a track's remaining time falls below this, the next item
+// in our virtual timeline gets pushed into Spotify's queue so the transition is
+// gapless. Kept short so the queue UI (slice 3) can remove/reorder upcoming[0]
+// for most of the song before it "locks". 5s is well above the 2.5s active-tab
+// poll cadence (we won't miss the window) and short enough that interaction
+// feels live.
+const PRE_QUEUE_LEAD_MS = 5000;
+
+// Decision predicates for sampler advance, extracted so the rune machinery
+// doesn't have to be mocked to verify them.
+export function shouldObserveAdvance(
+  samplerQueuedUri: string | null,
   currentUri: string | null,
 ): boolean {
-  return isSampling && queuedUri != null && currentUri === queuedUri;
+  // Spotify has transitioned into the track we pre-queued. Time to sync the
+  // server-side cursor and (later) pre-queue the next one.
+  return samplerQueuedUri != null && currentUri === samplerQueuedUri;
+}
+
+export function shouldPreQueueNext(
+  expectedCurrent: string | null,
+  currentUri: string | null,
+  samplerQueuedUri: string | null,
+  remainingMs: number,
+): boolean {
+  // Only pre-queue when (a) the currently-playing URI matches what our
+  // timeline thinks is current — otherwise the user is on something we don't
+  // own, (b) we haven't already pre-queued, and (c) the remaining time has
+  // dropped into the pre-queue lead window.
+  return (
+    expectedCurrent != null &&
+    currentUri === expectedCurrent &&
+    samplerQueuedUri == null &&
+    remainingMs > 0 &&
+    remainingMs <= PRE_QUEUE_LEAD_MS
+  );
 }
 
 // Poll cadences — visible tab gets 2.5s for snappy state, hidden tab drops
@@ -82,12 +109,16 @@ export interface PlaybackStore {
   prev(): Promise<void>;
   seek(positionMs: number): Promise<void>;
 
-  // Start sampler-driven shuffle: play one /api/shuffle/next pick, then keep the
-  // Spotify queue topped up so playback advances automatically (gapless). Stays
-  // active until the user starts something else (playTrack/shuffle) or it can't
-  // find a pick.
+  // Start sampler-driven shuffle: hydrate the virtual timeline from
+  // /api/shuffle/timeline, play timeline.current, and keep Spotify's queue
+  // topped up one ahead via the pre-queue lead window. Stays active until the
+  // user starts something else (playTrack/shuffle) or the timeline exhausts.
   startSampler(): Promise<void>;
   readonly isSampling: boolean;
+  // Client mirror of the server-side timeline. Null when not sampling. The
+  // queue view (slice 3) reads from this; back/forward updates it via the
+  // timeline endpoint.
+  readonly timeline: Timeline | null;
 
   // Force a state refresh — call after a remote action to catch up before
   // the next scheduled poll.
@@ -126,10 +157,18 @@ export function createPlaybackStore(): PlaybackStore {
   let pollHandle: ReturnType<typeof setTimeout> | null = null;
   let tickHandle: ReturnType<typeof setInterval> | null = null;
 
-  // Sampler auto-advance state. samplerQueuedUri is the pick we've handed to
-  // Spotify's queue and are waiting to see become the current track; when the
-  // poll observes that transition we top the queue back up with the next pick.
+  // Sampler / virtual-timeline state.
+  //
+  // timeline mirrors the server-side cursor (history/current/upcoming). It's
+  // re-read after every action so the queue UI sees authoritative state and
+  // we never diverge from what the next /forward will produce.
+  //
+  // samplerQueuedUri is the URI we've pushed into Spotify's queue ahead of the
+  // current track. Tracking it lets us (a) recognize the natural transition
+  // (Spotify's current URI changes to match this one) and (b) skip re-queueing
+  // until the next pre-queue window.
   let isSampling = $state(false);
+  let timeline = $state<Timeline | null>(null);
   let samplerQueuedUri: string | null = null;
   let samplerBusy = false; // guards against overlapping advances across polls
   let lastCurrentUri: string | null = null; // current track URI at the previous poll
@@ -144,7 +183,9 @@ export function createPlaybackStore(): PlaybackStore {
       const data = (await res.json()) as CurrentlyPlayingResponse;
       if (data.playing == null) {
         state = { ...EMPTY_STATE };
-        maybeAdvanceSampler(null);
+        // Pass zeroes for position/duration — predicates short-circuit on the
+        // null currentUri before the time math matters.
+        maybeAdvanceSampler(null, 0, 0);
         return;
       }
       const p = data.playing;
@@ -170,7 +211,7 @@ export function createPlaybackStore(): PlaybackStore {
         ratingTrigger++;
       }
       err = null;
-      maybeAdvanceSampler(p.uri);
+      maybeAdvanceSampler(p.uri, p.progressMs ?? 0, p.durationMs);
     } catch {
       /* network blip — keep last known state */
     }
@@ -260,18 +301,7 @@ export function createPlaybackStore(): PlaybackStore {
     setTimeout(() => void refresh(), 300);
   }
 
-  // ── Sampler auto-advance ─────────────────────────────────────────────
-
-  async function fetchSamplerPick(): Promise<string | null> {
-    try {
-      const res = await fetch('/api/shuffle/next', { method: 'POST' });
-      if (!res.ok) return null;
-      const j = (await res.json()) as { uri: string | null };
-      return j.uri ?? null;
-    } catch {
-      return null;
-    }
-  }
+  // ── Sampler / virtual-timeline driver ────────────────────────────────
 
   async function callQueue(uri: string): Promise<boolean> {
     const res = await fetch('/api/spotify/player/control', {
@@ -282,85 +312,167 @@ export function createPlaybackStore(): PlaybackStore {
     return handleControlResponse(res);
   }
 
-  // Bumped every time sampling starts or stops. Async advance/seed tasks capture
-  // the generation when they begin and bail if it changes mid-flight — so a pick
-  // fetched for an old session can't enqueue into a queue the user has since
-  // replaced (e.g. by starting a normal shuffle while a fetch was in flight).
+  type TimelineActionBody =
+    | { action: 'advance' | 'forward' | 'back' }
+    | { action: 'add'; uri: string; position?: number }
+    | { action: 'remove'; uri: string; index?: number }
+    | { action: 'reorder'; fromIndex: number; toIndex: number };
+
+  async function fetchTimeline(): Promise<Timeline | null> {
+    try {
+      const res = await fetch('/api/shuffle/timeline');
+      if (!res.ok) return null;
+      const j = (await res.json()) as { timeline: Timeline };
+      return j.timeline ?? null;
+    } catch { return null; }
+  }
+
+  async function postTimelineAction(body: TimelineActionBody): Promise<Timeline | null> {
+    try {
+      const res = await fetch('/api/shuffle/timeline', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) return null;
+      const j = (await res.json()) as { timeline: Timeline };
+      return j.timeline ?? null;
+    } catch { return null; }
+  }
+
+  // Bumped every time sampling starts/stops or the user performs an explicit
+  // skip (next/prev). Async advance/pre-queue/reseed tasks capture this when
+  // they begin and bail if it changes mid-flight — so a pick fetched for an
+  // old session can't enqueue into a queue the user has since replaced.
   let samplerGeneration = 0;
 
-  // Pull the next pick and append it to Spotify's queue. Stops sampling if the
-  // sampler is exhausted (no playable pick). Bails without side effects if the
-  // session was superseded while the pick was being fetched.
-  async function queueNextSamplerPick(gen: number): Promise<void> {
-    const next = await fetchSamplerPick();
+  // Push the head of upcoming into Spotify's queue. Called from the pre-queue
+  // window (last N seconds of the current track) so the transition is gapless.
+  // Re-checks generation before AND after the network call so a concurrent
+  // skip can't leave us with samplerQueuedUri pointing at a now-stale URI.
+  async function preQueueUpcoming(gen: number): Promise<void> {
+    const next = timeline?.upcoming[0] ?? null;
+    if (!next) return;
     if (gen !== samplerGeneration) return;
-    if (!next) { stopSampling(); return; }
     const ok = await callQueue(next);
-    // Only record it as the awaited URI once it's actually in the queue; if the
-    // enqueue failed, leave samplerQueuedUri untouched so drain-recovery can step
-    // in when the current track finishes rather than waiting on a phantom pick.
     if (gen !== samplerGeneration || !ok) return;
     samplerQueuedUri = next;
   }
 
-  async function startSampler(): Promise<void> {
-    const gen = ++samplerGeneration; // invalidate any in-flight advance/seed
+  // Spotify transitioned into the pre-queued URI. Sync the server-side cursor
+  // (current → history, upcoming[0] → current, refill if low) and reset
+  // samplerQueuedUri so the next pre-queue window can fire.
+  async function onObservedAdvance(gen: number): Promise<void> {
+    const tl = await postTimelineAction({ action: 'forward' });
+    if (gen !== samplerGeneration) return;
+    if (!tl || !tl.current) { stopSampling(); return; }
+    timeline = tl;
     samplerQueuedUri = null;
-    const first = await fetchSamplerPick();
-    if (gen !== samplerGeneration) return;
-    if (!first) { isSampling = false; return; }
-    // Only consider ourselves sampling once playback actually started; a
-    // no-device / premium / auth failure should not leave a stuck active state.
-    const ok = await callPlay({ uris: [first] });
-    if (gen !== samplerGeneration) return;
-    if (!ok) { isSampling = false; return; }
-    isSampling = true;
-    await queueNextSamplerPick(gen);
   }
 
-  // Re-seed playback when the sampler is active but the queue has drained to
-  // nothing (fast double-skips, or a hidden tab polling slowly enough that a
-  // queued track started and finished between polls). Plays a fresh pick.
-  async function reseedSampler(gen: number): Promise<void> {
-    const pick = await fetchSamplerPick();
-    if (gen !== samplerGeneration) return;
-    if (!pick) { stopSampling(); return; }
-    const ok = await callPlay({ uris: [pick] });
-    if (gen !== samplerGeneration) return;
-    // A failed re-seed (no device / auth / transient) can't keep music going;
-    // stop sampling so we don't sit active-but-inert. User re-clicks to resume.
-    if (!ok) { stopSampling(); return; }
-    await queueNextSamplerPick(gen);
-  }
-
-  // Called after every poll. Two jobs while sampling:
-  //  1. When the track we queued has become current, Spotify advanced into our
-  //     pick — top the queue back up. Updating samplerQueuedUri to the new pick
-  //     means this won't re-fire until the *next* transition.
-  //  2. If playback has drained to nothing, re-seed so music keeps going.
-  function maybeAdvanceSampler(currentUri: string | null): void {
-    // Always record what this poll saw, even when not sampling or busy — a stale
-    // lastCurrentUri is what would let a queue-drain slip past drain-recovery.
+  async function startSampler(): Promise<void> {
+    // Take the busy lock so a concurrent poll can't kick off a pre-queue under
+    // a stale `timeline` while startSampler is still hydrating it. The poll's
+    // own check (`samplerBusy`) is what enforces this — we just have to set it.
+    if (samplerBusy) return;
+    samplerBusy = true;
     try {
-      if (!isSampling || samplerBusy) return;
-      if (shouldQueueNextPick(isSampling, samplerQueuedUri, currentUri)) {
-        samplerBusy = true;
-        const gen = samplerGeneration;
-        void queueNextSamplerPick(gen).finally(() => { samplerBusy = false; });
-      } else if (currentUri == null && lastCurrentUri != null) {
-        // Was playing, now nothing — the queue ran dry. Re-seed.
-        samplerBusy = true;
-        const gen = samplerGeneration;
-        void reseedSampler(gen).finally(() => { samplerBusy = false; });
+      const gen = ++samplerGeneration;
+      samplerQueuedUri = null;
+      // Resume an existing timeline if one is persisted; otherwise advance
+      // from empty to materialize the first track (timeline endpoint refills
+      // before advancing when upcoming is empty).
+      let tl = await fetchTimeline();
+      if (gen !== samplerGeneration) return;
+      if (!tl || !tl.current) {
+        tl = await postTimelineAction({ action: 'forward' });
+        if (gen !== samplerGeneration) return;
       }
+      if (!tl || !tl.current) { isSampling = false; timeline = null; return; }
+      timeline = tl;
+      // Only consider ourselves sampling once playback actually started.
+      const ok = await callPlay({ uris: [tl.current] });
+      if (gen !== samplerGeneration) return;
+      if (!ok) { isSampling = false; timeline = null; return; }
+      isSampling = true;
     } finally {
-      lastCurrentUri = currentUri;
+      samplerBusy = false;
     }
   }
 
+  // Re-seed when sampling is active but Spotify drained to nothing (fast
+  // double-skips, or a hidden tab polling slowly enough that a queued track
+  // started and finished between polls). Re-uses startSampler's resume logic.
+  async function reseedSampler(gen: number): Promise<void> {
+    let tl = await fetchTimeline();
+    if (gen !== samplerGeneration) return;
+    if (!tl || !tl.current) {
+      tl = await postTimelineAction({ action: 'forward' });
+      if (gen !== samplerGeneration) return;
+    }
+    if (!tl || !tl.current) { stopSampling(); return; }
+    timeline = tl;
+    const ok = await callPlay({ uris: [tl.current] });
+    if (gen !== samplerGeneration) return;
+    if (!ok) { stopSampling(); return; }
+    samplerQueuedUri = null;
+  }
+
+  // Run after every poll. Four cases:
+  //  1. The pre-queued URI became current → POST forward to sync cursor.
+  //  2. We're inside the pre-queue lead window → push upcoming[0] to Spotify.
+  //  3. Playback drained (currentUri null but it was playing) → re-seed.
+  //  4. Nothing to do.
+  //
+  // We only update lastCurrentUri when we actually evaluated the predicates.
+  // If samplerBusy is true (a prior in-flight task), we leave lastCurrentUri
+  // alone so a poll that observed `null` while we were busy still triggers
+  // drain recovery on the next poll once the task settles. Otherwise drains
+  // could be silently swallowed when they coincide with an in-flight action.
+  function maybeAdvanceSampler(
+    currentUri: string | null,
+    positionMs: number,
+    durationMs: number,
+  ): void {
+    if (!isSampling) { lastCurrentUri = currentUri; return; }
+    if (samplerBusy) return;
+
+    if (shouldObserveAdvance(samplerQueuedUri, currentUri)) {
+      samplerBusy = true;
+      const gen = samplerGeneration;
+      void onObservedAdvance(gen).finally(() => { samplerBusy = false; });
+      lastCurrentUri = currentUri;
+      return;
+    }
+
+    const remaining = durationMs - positionMs;
+    if (
+      shouldPreQueueNext(timeline?.current ?? null, currentUri, samplerQueuedUri, remaining)
+    ) {
+      samplerBusy = true;
+      const gen = samplerGeneration;
+      void preQueueUpcoming(gen).finally(() => { samplerBusy = false; });
+      lastCurrentUri = currentUri;
+      return;
+    }
+
+    if (currentUri == null && lastCurrentUri != null) {
+      samplerBusy = true;
+      const gen = samplerGeneration;
+      void reseedSampler(gen).finally(() => { samplerBusy = false; });
+      // Don't update lastCurrentUri yet — let the next poll see whether the
+      // reseed succeeded. If it did, currentUri will be non-null. If not,
+      // drain recovery should fire again.
+      return;
+    }
+
+    lastCurrentUri = currentUri;
+  }
+
   function stopSampling(): void {
-    samplerGeneration++; // invalidate in-flight advance/seed tasks
+    samplerGeneration++;
     isSampling = false;
+    timeline = null;
     samplerQueuedUri = null;
   }
 
@@ -383,8 +495,64 @@ export function createPlaybackStore(): PlaybackStore {
     await callControl(willPause ? 'pause' : 'resume');
   }
 
-  async function next(): Promise<void> { await callControl('next'); }
-  async function prev(): Promise<void> { await callControl('previous'); }
+  // In sampler mode, prev/next move the virtual cursor and explicitly play the
+  // new current — we don't rely on Spotify's native prev/next because (a) prev
+  // would re-play the just-finished track from Spotify's history, not our
+  // timeline's history, and (b) next would skip into whatever we pre-queued,
+  // which is correct *only* by accident. Outside sampler mode, Spotify's
+  // native prev/next still applies.
+  async function moveCursor(direction: 'back' | 'forward'): Promise<void> {
+    // Hold the busy lock for the whole skip so a concurrent poll can't fire a
+    // pre-queue against the now-stale `timeline` (which would then look like
+    // an observed-advance once playTrack lands on the same URI — a double-skip).
+    if (samplerBusy) return;
+    samplerBusy = true;
+    try {
+      // Stash pre-queue state so a boundary no-op (back at history start /
+      // forward past an exhausted sampler) can restore it. Without this, a
+      // user pressing back at the start of history would forget the URI we'd
+      // already pushed to Spotify, and the later natural transition wouldn't
+      // sync the cursor.
+      const previousQueuedUri = samplerQueuedUri;
+      const previousCurrent = timeline?.current ?? null;
+      const gen = ++samplerGeneration; // invalidate any in-flight task
+      samplerQueuedUri = null;
+      const tl = await postTimelineAction({ action: direction });
+      if (gen !== samplerGeneration) return;
+      if (!tl) {
+        // POST failed; we didn't actually move, so restore the pre-queue.
+        samplerQueuedUri = previousQueuedUri;
+        return;
+      }
+      // back() / advance() return the SAME timeline when they can't move
+      // (back at start of history, forward at exhausted sampler — refill also
+      // couldn't add anything). Don't replay the current track, and restore
+      // the pre-queue so the natural transition still syncs.
+      //
+      // Note: when duplicate URIs land in adjacent timeline slots (only
+      // possible once slice 5 lets the user add the same track twice), this
+      // also no-ops on a real cursor move. The audio is identical either way
+      // so it's not a functional bug — slice 5 can refine if needed.
+      if (!tl.current || tl.current === previousCurrent) {
+        timeline = tl;
+        samplerQueuedUri = previousQueuedUri;
+        return;
+      }
+      timeline = tl;
+      await callPlay({ uris: [tl.current] });
+    } finally {
+      samplerBusy = false;
+    }
+  }
+
+  async function next(): Promise<void> {
+    if (isSampling) { await moveCursor('forward'); return; }
+    await callControl('next');
+  }
+  async function prev(): Promise<void> {
+    if (isSampling) { await moveCursor('back'); return; }
+    await callControl('previous');
+  }
 
   async function seek(positionMs: number): Promise<void> {
     state = { ...state, position_ms: positionMs };
@@ -405,6 +573,7 @@ export function createPlaybackStore(): PlaybackStore {
     playTrack, shuffle,
     startSampler,
     get isSampling() { return isSampling; },
+    get timeline() { return timeline; },
     togglePlay, next, prev, seek,
     refresh,
     setCurrentRating,

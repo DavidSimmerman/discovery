@@ -23,6 +23,7 @@ function makeStore(active: boolean) {
     shuffle: vi.fn(),
     startSampler: vi.fn(),
     isSampling: false,
+    timeline: null,
     togglePlay: vi.fn(),
     next: vi.fn(),
     prev: vi.fn(),

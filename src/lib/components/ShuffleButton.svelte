@@ -10,9 +10,9 @@
   }: { store: PlaybackStore; getUris: () => Promise<readonly string[]>; label?: string } = $props();
 
   let loading = $state(false);
-  // Dev/smoke-test toggle: localStorage.setItem('discovery.sampler', '1') in the browser
-  // console flips this button from the dumb fisher-yates path to one /api/shuffle/next pick
-  // per click. Auto-advance through the sampler comes in a later slice.
+  // Dev/smoke-test toggle: localStorage.setItem('discovery.sampler', '1') in the
+  // browser console flips this button from the dumb fisher-yates path to the
+  // virtual-timeline driver (startSampler). Replaced by a real setting in slice 6.
   let useSampler = $state(false);
   onMount(() => {
     try {

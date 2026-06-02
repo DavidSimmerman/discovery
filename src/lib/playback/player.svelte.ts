@@ -248,7 +248,9 @@ export function createPlaybackStore(): PlaybackStore {
   function init(): void {
     if (isReady) return;
     isReady = true;
-    void refresh();
+    // Refresh first so tryResumeSampler can compare Spotify's current URI to
+    // the timeline. Fire-and-forget so init stays sync.
+    void refresh().then(() => tryResumeSampler());
     schedulePoll();
     startLocalTick();
     if (browser) document.addEventListener('visibilitychange', onVisibilityChange);
@@ -476,6 +478,62 @@ export function createPlaybackStore(): PlaybackStore {
     samplerQueuedUri = null;
   }
 
+  // Auto-resume sampler mode after a page reload. The store is reconstructed
+  // empty on every navigation, so without this, Spotify continues playing the
+  // sampler-driven track but back/forward fall through to Spotify's native
+  // prev/next — which errors because we started with a single-URI playback
+  // context. Replaced by a real setting in slice 6; for now we gate on the
+  // localStorage flag the user already had to set to enable sampler mode.
+  //
+  // Idempotent. Safe to call from init() and from prev()/next() as a lazy
+  // fallback for the brief window before init's resume finishes.
+  let resumeAttemptInflight: Promise<void> | null = null;
+  async function tryResumeSampler(): Promise<void> {
+    if (isSampling) return;
+    if (resumeAttemptInflight) { await resumeAttemptInflight; return; }
+    let flagSet = false;
+    try {
+      if (browser) flagSet = localStorage.getItem('discovery.sampler') === '1';
+    } catch { return; }
+    if (!flagSet) return;
+
+    resumeAttemptInflight = (async () => {
+      try {
+        if (samplerBusy) return;
+        samplerBusy = true;
+        try {
+          const tl = await fetchTimeline();
+          if (!tl || !tl.current) return;
+          // Resume only if Spotify is on a track our timeline owns. Match
+          // against current (the normal case) or upcoming[0] (we'd pre-queued
+          // and Spotify already advanced, but we hadn't observed it). Anything
+          // else means the user is playing something we don't own and we
+          // should stay out of the way.
+          const currentUri = state.track?.uri ?? null;
+          if (currentUri == null) return;
+          const matchesCurrent = currentUri === tl.current;
+          const matchesPreQueued = currentUri === (tl.upcoming[0] ?? null);
+          if (!matchesCurrent && !matchesPreQueued) return;
+
+          timeline = tl;
+          isSampling = true;
+          // If Spotify is on upcoming[0], we missed the observed advance —
+          // sync the cursor now so the next pre-queue is correct.
+          if (matchesPreQueued) {
+            const gen = samplerGeneration;
+            const advanced = await postTimelineAction({ action: 'forward' });
+            if (gen === samplerGeneration && advanced) timeline = advanced;
+          }
+        } finally {
+          samplerBusy = false;
+        }
+      } finally {
+        resumeAttemptInflight = null;
+      }
+    })();
+    await resumeAttemptInflight;
+  }
+
   async function playTrack(uri: string, allUris: readonly string[]): Promise<void> {
     stopSampling();
     const queue = buildQueueFromClick(uri, allUris);
@@ -546,10 +604,15 @@ export function createPlaybackStore(): PlaybackStore {
   }
 
   async function next(): Promise<void> {
+    // Lazy resume in case init's auto-resume hasn't landed yet (user can hit a
+    // transport button within ms of page load). Idempotent — early-returns if
+    // we're already sampling or the flag isn't set.
+    if (!isSampling) await tryResumeSampler();
     if (isSampling) { await moveCursor('forward'); return; }
     await callControl('next');
   }
   async function prev(): Promise<void> {
+    if (!isSampling) await tryResumeSampler();
     if (isSampling) { await moveCursor('back'); return; }
     await callControl('previous');
   }

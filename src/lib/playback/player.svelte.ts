@@ -121,6 +121,17 @@ export interface PlaybackStore {
   // queue view (slice 3) reads from this; back/forward updates it via the
   // timeline endpoint.
   readonly timeline: Timeline | null;
+  // The URI we've already pushed into Spotify's queue ahead of the current
+  // track. The Queue tab uses this to lock the matching upcoming row — once
+  // pushed, removing/reordering it client-side would desync the cursor when
+  // Spotify naturally advances into it. Null when nothing is pre-queued.
+  readonly samplerQueuedUri: string | null;
+
+  // Queue mutators — used by the queue tab in the now-playing tabbed panel.
+  // Both update the local timeline mirror from the server response so the UI
+  // doesn't have to wait for the next poll.
+  removeFromQueue(uri: string, index: number): Promise<void>;
+  reorderQueue(fromIndex: number, toIndex: number): Promise<void>;
 
   // Force a state refresh — call after a remote action to catch up before
   // the next scheduled poll.
@@ -170,7 +181,11 @@ export function createPlaybackStore(): PlaybackStore {
   // until the next pre-queue window.
   let isSampling = $state(false);
   let timeline = $state<Timeline | null>(null);
-  let samplerQueuedUri: string | null = null;
+  // Reactive so the queue UI can lock the matching upcoming row — see
+  // `samplerQueuedUri` getter on PlaybackStore. A row whose URI matches this
+  // value is already in Spotify's queue and removing/reordering it would
+  // desync the cursor when Spotify naturally advances into it.
+  let samplerQueuedUri = $state<string | null>(null);
   let samplerBusy = false; // guards against overlapping advances across polls
   let lastCurrentUri: string | null = null; // current track URI at the previous poll
 
@@ -608,6 +623,37 @@ export function createPlaybackStore(): PlaybackStore {
     await callControl('seek', positionMs);
   }
 
+  // Queue mutators share the same busy lock as moveCursor / pre-queue / advance:
+  // without it, a pre-queue running concurrently with a remove can leave us with
+  // samplerQueuedUri pointing at a URI that's no longer in upcoming. With the
+  // lock, edits are serialized against advance/pre-queue and only the latest-
+  // returned timeline wins (gen check prevents an older response overwriting a
+  // newer one).
+  async function mutateTimeline(
+    body: { action: 'remove'; uri: string; index?: number } | { action: 'reorder'; fromIndex: number; toIndex: number },
+  ): Promise<void> {
+    if (!isSampling) return;
+    if (samplerBusy) return;
+    samplerBusy = true;
+    const gen = samplerGeneration;
+    try {
+      const tl = await postTimelineAction(body);
+      if (gen !== samplerGeneration) return;
+      if (tl) timeline = tl;
+    } finally {
+      samplerBusy = false;
+    }
+  }
+
+  async function removeFromQueue(uri: string, index: number): Promise<void> {
+    await mutateTimeline({ action: 'remove', uri, index });
+  }
+
+  async function reorderQueue(fromIndex: number, toIndex: number): Promise<void> {
+    if (fromIndex === toIndex) return;
+    await mutateTimeline({ action: 'reorder', fromIndex, toIndex });
+  }
+
   function setCurrentRating(uri: string, ratingStars: number | null): void {
     ratingByUri.set(uri, ratingStars);
     ratingTrigger++;
@@ -623,7 +669,9 @@ export function createPlaybackStore(): PlaybackStore {
     startSampler,
     get isSampling() { return isSampling; },
     get timeline() { return timeline; },
+    get samplerQueuedUri() { return samplerQueuedUri; },
     togglePlay, next, prev, seek,
+    removeFromQueue, reorderQueue,
     refresh,
     setCurrentRating,
     get currentRating() {

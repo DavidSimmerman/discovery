@@ -2,7 +2,7 @@ import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { listLibrary, libraryFacets, type LibrarySort } from '$lib/server/library';
 
-const VALID_SORTS: readonly LibrarySort[] = ['recency', 'rating', 'name', 'artist'];
+const VALID_SORTS: readonly LibrarySort[] = ['recency', 'rating', 'name', 'artist', 'top'];
 
 export const GET: RequestHandler = async ({ locals, url }) => {
   if (!locals.user) throw error(401, 'not logged in');

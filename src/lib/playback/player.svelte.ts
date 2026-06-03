@@ -54,10 +54,12 @@ export function shouldPreQueueNext(
 }
 
 // Poll cadences — visible tab gets 2.5s for snappy state, hidden tab drops
-// to 15s to save battery and rate-limit budget. Local tick fills the gap.
+// to 15s to save battery and rate-limit budget. The Scrubber interpolates
+// position smoothly between polls (RAF), so the store does NOT tick position
+// itself — doing so churned `state` every second and fought the Scrubber's
+// own interpolation, causing the bar to jump backward on each poll.
 const POLL_ACTIVE_MS = 2500;
 const POLL_HIDDEN_MS = 15_000;
-const LOCAL_TICK_MS = 1000;
 
 export type PlaybackError =
   | null
@@ -155,7 +157,6 @@ export function createPlaybackStore(): PlaybackStore {
   let ratingTrigger = $state(0);
 
   let pollHandle: ReturnType<typeof setTimeout> | null = null;
-  let tickHandle: ReturnType<typeof setInterval> | null = null;
 
   // Sampler / virtual-timeline state.
   //
@@ -226,18 +227,6 @@ export function createPlaybackStore(): PlaybackStore {
     }, hidden ? POLL_HIDDEN_MS : POLL_ACTIVE_MS);
   }
 
-  function startLocalTick(): void {
-    if (tickHandle != null) return;
-    tickHandle = setInterval(() => {
-      if (!state.paused && state.track && state.duration_ms > 0) {
-        const next = Math.min(state.position_ms + LOCAL_TICK_MS, state.duration_ms);
-        if (next !== state.position_ms) {
-          state = { ...state, position_ms: next };
-        }
-      }
-    }, LOCAL_TICK_MS);
-  }
-
   function onVisibilityChange(): void {
     if (document.visibilityState === 'visible') {
       void refresh();
@@ -252,15 +241,12 @@ export function createPlaybackStore(): PlaybackStore {
     // the timeline. Fire-and-forget so init stays sync.
     void refresh().then(() => tryResumeSampler());
     schedulePoll();
-    startLocalTick();
     if (browser) document.addEventListener('visibilitychange', onVisibilityChange);
   }
 
   function destroy(): void {
     if (pollHandle != null) clearTimeout(pollHandle);
-    if (tickHandle != null) clearInterval(tickHandle);
     pollHandle = null;
-    tickHandle = null;
     isReady = false;
     if (browser) document.removeEventListener('visibilitychange', onVisibilityChange);
   }

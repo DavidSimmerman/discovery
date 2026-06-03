@@ -113,6 +113,13 @@ async function findLibraryVersions(
 ): Promise<VersionEntry[]> {
   if (source.artists.length === 0) return [];
 
+  // Build a real text[] literal (ARRAY[$1, $2, …]). Interpolating the JS array
+  // directly compiles to a row expression `($1, $2)`, which `&&` can't use.
+  const artistsArray = sql`ARRAY[${sql.join(
+    source.artists.map((a) => sql`${a}`),
+    sql`, `,
+  )}]::text[]`;
+
   const rows = await db.execute<LibraryVersionRow>(sql`
     SELECT
       t.spotify_track_uri AS uri,
@@ -128,7 +135,7 @@ async function findLibraryVersions(
     JOIN tracks t ON t.spotify_track_uri = r.spotify_track_uri
     WHERE r.user_id = ${userId}
       AND t.spotify_track_uri <> ${source.uri}
-      AND t.artists && ${source.artists}::text[]
+      AND t.artists && ${artistsArray}
   `);
 
   const sourceGroupable: Groupable = {
@@ -172,14 +179,15 @@ async function findCatalogVersions(
 ): Promise<VersionEntry[]> {
   if (source.artists.length === 0) return [];
   const { access_token } = await getValidAccessToken(userId);
-  // Scoped search: <canonical title> + primary artist. Skipping quote chars
-  // because Spotify's parser is finicky and the canonical is already clean.
+  // Scoped search: <canonical title> + primary artist. Fields MUST be quoted —
+  // an unquoted `track:a b c` only binds the first token to the filter and
+  // treats the rest as free text, which returns junk or nothing.
   const sanitize = (s: string) => s.replace(/["()[\]{}]/g, ' ').replace(/\s+/g, ' ').trim();
-  const q = `track:${sanitize(source.canonicalTitle)} artist:${sanitize(source.artists[0])}`;
+  const q = `track:"${sanitize(source.canonicalTitle)}" artist:"${sanitize(source.artists[0])}"`;
 
   let results: SpotifyTrack[];
   try {
-    results = await searchTracks(access_token, q, 50);
+    results = await searchTracks(access_token, q, 10);
   } catch {
     return [];
   }
@@ -239,13 +247,14 @@ export async function findTrackVersions(
   const excludeUris = new Set<string>([source.uri, ...library.map((v) => v.uri)]);
   const catalog = await findCatalogVersions(userId, source, excludeUris);
 
-  // Sort library by rating desc then title; catalog by title.
+  // Library: rating desc, then title. Catalog is left in Spotify's search
+  // relevance order — track `popularity` was removed from the API (Feb 2026
+  // migration), and relevance is the best available popularity proxy.
   library.sort(
     (a, b) =>
       (b.rating ?? 0) - (a.rating ?? 0) ||
       a.title.toLowerCase().localeCompare(b.title.toLowerCase()),
   );
-  catalog.sort((a, b) => a.title.toLowerCase().localeCompare(b.title.toLowerCase()));
 
   return {
     source: {

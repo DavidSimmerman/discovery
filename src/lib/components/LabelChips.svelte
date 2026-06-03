@@ -64,9 +64,15 @@
     }
   }
 
-  // Re-fetch whenever the track changes; stale chips clear immediately.
+  // Re-fetch only when the track actually changes. Guarding on `loadedUri`
+  // matters because on now-playing `trackUri` is wired through a derived that
+  // re-evaluates on every playback poll — without the guard the chips would
+  // clear and refetch repeatedly, flickering.
+  let loadedUri = $state<string | null>(null);
   $effect(() => {
     const uri = trackUri;
+    if (uri === loadedUri) return;
+    loadedUri = uri;
     labels = [];
     if (!uri) return;
     void fetchLabels(uri);

@@ -50,9 +50,9 @@
       </div>
     {/if}
 
-    <div class="flex flex-col items-center gap-1">
-      <h2 class="text-2xl font-extrabold leading-tight">{playing.name}</h2>
-      <p class="text-sm text-white/70">{playing.artists.join(', ')}</p>
+    <div class="flex w-full max-w-xs flex-col items-center gap-1">
+      <h2 class="text-2xl font-extrabold leading-tight text-balance break-words">{playing.name}</h2>
+      <p class="text-sm text-white/70 text-balance break-words">{playing.artists.join(', ')}</p>
     </div>
 
     <StarRating interactive value={rating ?? 0} size={42} onchange={onrate} />

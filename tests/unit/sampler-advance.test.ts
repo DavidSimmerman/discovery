@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { shouldObserveAdvance, shouldPreQueueNext } from '$lib/playback/player.svelte';
+import { shouldObserveAdvance, shouldPreQueueNext, shouldDetectNativePrev } from '$lib/playback/player.svelte';
 
 describe('shouldObserveAdvance', () => {
   it('fires when the pre-queued URI is now current (Spotify advanced)', () => {
@@ -56,5 +56,40 @@ describe('shouldPreQueueNext', () => {
     expect(
       shouldPreQueueNext('spotify:track:cur', 'spotify:track:cur', null, 0),
     ).toBe(false);
+  });
+});
+
+describe('shouldDetectNativePrev', () => {
+  const URI = 'spotify:track:cur';
+  const NOW = 1_000_000;
+  const IGNORE_PAST = 0; // seek-ignore window has elapsed
+  const IGNORE_FUTURE = NOW + 5_000; // seek-ignore still active
+
+  it('fires when position drops from inside the 10s window to ~0 on the same URI', () => {
+    expect(shouldDetectNativePrev(URI, URI, 0, 4_000, NOW, IGNORE_PAST)).toBe(true);
+  });
+
+  it('does not fire when the prior position was past the 10s threshold (scrub-to-start)', () => {
+    expect(shouldDetectNativePrev(URI, URI, 0, 180_000, NOW, IGNORE_PAST)).toBe(false);
+  });
+
+  it('does not fire when the URI changed (natural advance or different track)', () => {
+    expect(shouldDetectNativePrev('spotify:track:other', URI, 0, 4_000, NOW, IGNORE_PAST)).toBe(false);
+  });
+
+  it('does not fire when nothing is playing (currentUri null)', () => {
+    expect(shouldDetectNativePrev(null, URI, 0, 4_000, NOW, IGNORE_PAST)).toBe(false);
+  });
+
+  it('does not fire when the seek-ignore window is still active', () => {
+    expect(shouldDetectNativePrev(URI, URI, 0, 4_000, NOW, IGNORE_FUTURE)).toBe(false);
+  });
+
+  it('does not fire when prior position was already near zero (fresh track start)', () => {
+    expect(shouldDetectNativePrev(URI, URI, 0, 100, NOW, IGNORE_PAST)).toBe(false);
+  });
+
+  it('does not fire when current position is still well past zero', () => {
+    expect(shouldDetectNativePrev(URI, URI, 3_000, 4_000, NOW, IGNORE_PAST)).toBe(false);
   });
 });

@@ -15,13 +15,26 @@ import type { Timeline } from '$lib/server/shuffle/timeline';
 
 const KEY = Symbol('playback');
 
-// Pre-queue lead: when a track's remaining time falls below this, the next item
-// in our virtual timeline gets pushed into Spotify's queue so the transition is
-// gapless. Kept short so the queue UI (slice 3) can remove/reorder upcoming[0]
-// for most of the song before it "locks". 5s is well above the 2.5s active-tab
-// poll cadence (we won't miss the window) and short enough that interaction
-// feels live.
+// Pre-queue lead: kept as a defensive fallback for the case where the
+// immediate post-play queue-push failed (network blip). Normal flow now pushes
+// upcoming[0] into Spotify's queue right after callPlay so native NEXT (lock
+// screen, Bluetooth, headphones, Spotify app) actually advances through our
+// timeline instead of dead-ending on an empty queue. shouldPreQueueNext stays
+// because it triggers iff samplerQueuedUri == null — i.e. only when the
+// immediate push missed.
 const PRE_QUEUE_LEAD_MS = 5000;
+
+// Threshold for translating a native PREV press into a virtual back-cursor
+// move. Mirrors Spotify's own player: prev within first 10s goes back a track,
+// otherwise it restarts the current track. The native-prev detector below
+// fires when position drops from inside this window back to ~0 without us
+// initiating a seek.
+const POSITION_PREV_THRESHOLD_MS = 10_000;
+
+// After our own seek() call, ignore prev-detection for this window so a
+// scrub-to-zero isn't misread as a native PREV. 3s covers two poll cycles
+// (active-tab cadence is 2.5s) plus a small buffer.
+const SEEK_IGNORE_WINDOW_MS = 3000;
 
 // Decision predicates for sampler advance, extracted so the rune machinery
 // doesn't have to be mocked to verify them.
@@ -50,6 +63,29 @@ export function shouldPreQueueNext(
     samplerQueuedUri == null &&
     remainingMs > 0 &&
     remainingMs <= PRE_QUEUE_LEAD_MS
+  );
+}
+
+export function shouldDetectNativePrev(
+  currentUri: string | null,
+  lastUri: string | null,
+  positionMs: number,
+  lastPositionMs: number,
+  nowMs: number,
+  seekIgnoreUntilMs: number,
+): boolean {
+  // Spotify's native PREV (lock screen, Bluetooth, headphones, the Spotify app)
+  // restarts the current track when there's nothing in its previous-tracks
+  // queue. We translate that into a virtual back-cursor move when the user was
+  // clearly trying to go back — i.e. they were inside the first 10s of the
+  // track, not 3 minutes in scrubbing to the start.
+  return (
+    currentUri != null &&
+    currentUri === lastUri &&
+    lastPositionMs > 500 &&
+    lastPositionMs < POSITION_PREV_THRESHOLD_MS &&
+    positionMs < 500 &&
+    nowMs > seekIgnoreUntilMs
   );
 }
 
@@ -188,6 +224,8 @@ export function createPlaybackStore(): PlaybackStore {
   let samplerQueuedUri = $state<string | null>(null);
   let samplerBusy = false; // guards against overlapping advances across polls
   let lastCurrentUri: string | null = null; // current track URI at the previous poll
+  let lastPositionMs = 0; // current position at the previous poll (native PREV detector)
+  let prevDetectionIgnoreUntil = 0; // unix ms; set by any action that legitimately drops position to 0 (seek, callPlay)
 
   async function refresh(): Promise<void> {
     try {
@@ -280,6 +318,11 @@ export function createPlaybackStore(): PlaybackStore {
   }
 
   async function callPlay(payload: Record<string, unknown>): Promise<boolean> {
+    // A play call always drops position to ~0 (either on the same URI when we
+    // re-play or on a new URI). Suppress native-PREV detection so the chase
+    // refresh (and the next poll or two) don't misread our own reset as a
+    // user PREV press.
+    prevDetectionIgnoreUntil = Date.now() + SEEK_IGNORE_WINDOW_MS;
     const res = await fetch('/api/spotify/player/play', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
@@ -349,28 +392,48 @@ export function createPlaybackStore(): PlaybackStore {
   // old session can't enqueue into a queue the user has since replaced.
   let samplerGeneration = 0;
 
-  // Push the head of upcoming into Spotify's queue. Called from the pre-queue
-  // window (last N seconds of the current track) so the transition is gapless.
+  // Push the head of upcoming into Spotify's queue. Two callers:
+  //   1. preQueueUpcoming (lead-window fallback) — when the immediate push
+  //      missed and we need to top up Spotify's queue before the song ends.
+  //   2. queueUpcomingHead (post-play) — called right after every callPlay
+  //      that changes the current track so native NEXT (lock screen / car /
+  //      Bluetooth / Spotify app) always has somewhere to go.
   // Re-checks generation before AND after the network call so a concurrent
   // skip can't leave us with samplerQueuedUri pointing at a now-stale URI.
-  async function preQueueUpcoming(gen: number): Promise<void> {
+  async function pushUpcomingHeadToSpotify(gen: number): Promise<void> {
     const next = timeline?.upcoming[0] ?? null;
     if (!next) return;
     if (gen !== samplerGeneration) return;
+    if (samplerQueuedUri === next) return; // already queued
     const ok = await callQueue(next);
     if (gen !== samplerGeneration || !ok) return;
+    // Re-check upcoming[0] after the await. mutateTimeline (remove/reorder)
+    // also bumps generation now, but this is a belt-and-braces guard against
+    // any future code path that mutates upcoming without a gen bump.
+    if (timeline?.upcoming[0] !== next) return;
     samplerQueuedUri = next;
+  }
+  async function preQueueUpcoming(gen: number): Promise<void> {
+    await pushUpcomingHeadToSpotify(gen);
+  }
+  // Fire-and-forget queue push after every callPlay. Failing here is non-fatal
+  // — the lead-window fallback retries near track end. Not awaited so initial
+  // play isn't blocked on Spotify's queue endpoint.
+  function queueUpcomingHeadAsync(gen: number): void {
+    void pushUpcomingHeadToSpotify(gen);
   }
 
   // Spotify transitioned into the pre-queued URI. Sync the server-side cursor
-  // (current → history, upcoming[0] → current, refill if low) and reset
-  // samplerQueuedUri so the next pre-queue window can fire.
+  // (current → history, upcoming[0] → current, refill if low) and immediately
+  // push the NEW upcoming[0] into Spotify's queue so native NEXT continues to
+  // work through the next song.
   async function onObservedAdvance(gen: number): Promise<void> {
     const tl = await postTimelineAction({ action: 'forward' });
     if (gen !== samplerGeneration) return;
     if (!tl || !tl.current) { stopSampling(); return; }
     timeline = tl;
     samplerQueuedUri = null;
+    queueUpcomingHeadAsync(gen);
   }
 
   async function startSampler(): Promise<void> {
@@ -398,6 +461,7 @@ export function createPlaybackStore(): PlaybackStore {
       if (gen !== samplerGeneration) return;
       if (!ok) { isSampling = false; timeline = null; return; }
       isSampling = true;
+      queueUpcomingHeadAsync(gen);
     } finally {
       samplerBusy = false;
     }
@@ -419,6 +483,7 @@ export function createPlaybackStore(): PlaybackStore {
     if (gen !== samplerGeneration) return;
     if (!ok) { stopSampling(); return; }
     samplerQueuedUri = null;
+    queueUpcomingHeadAsync(gen);
   }
 
   // Run after every poll. Four cases:
@@ -437,14 +502,56 @@ export function createPlaybackStore(): PlaybackStore {
     positionMs: number,
     durationMs: number,
   ): void {
-    if (!isSampling) { lastCurrentUri = currentUri; return; }
+    if (!isSampling) { lastCurrentUri = currentUri; lastPositionMs = positionMs; return; }
     if (samplerBusy) return;
+
+    // Native PREV detection first — Spotify will set position to ~0 on the
+    // same URI when prev is pressed with nothing in its previous-tracks queue.
+    // Inside the 10s window we treat that as "go back a track"; outside, we
+    // leave it alone (it was either a scrub-to-start or a "restart current"
+    // press, both already do the right thing).
+    if (
+      shouldDetectNativePrev(
+        currentUri,
+        lastCurrentUri,
+        positionMs,
+        lastPositionMs,
+        Date.now(),
+        prevDetectionIgnoreUntil,
+      )
+    ) {
+      samplerBusy = true;
+      const previousQueuedUri = samplerQueuedUri;
+      const previousCurrent = timeline?.current ?? null;
+      const gen = ++samplerGeneration;
+      samplerQueuedUri = null;
+      void (async () => {
+        const tl = await postTimelineAction({ action: 'back' });
+        if (gen !== samplerGeneration) return;
+        // Same no-op handling as moveCursor: if back() hits the start of
+        // history or POST fails, restore the prior queued URI so the natural
+        // advance still syncs the cursor correctly.
+        if (!tl) { samplerQueuedUri = previousQueuedUri; return; }
+        if (!tl.current || tl.current === previousCurrent) {
+          timeline = tl;
+          samplerQueuedUri = previousQueuedUri;
+          return;
+        }
+        timeline = tl;
+        await callPlay({ uris: [tl.current] });
+        if (gen === samplerGeneration) queueUpcomingHeadAsync(gen);
+      })().finally(() => { samplerBusy = false; });
+      lastCurrentUri = currentUri;
+      lastPositionMs = positionMs;
+      return;
+    }
 
     if (shouldObserveAdvance(samplerQueuedUri, currentUri)) {
       samplerBusy = true;
       const gen = samplerGeneration;
       void onObservedAdvance(gen).finally(() => { samplerBusy = false; });
       lastCurrentUri = currentUri;
+      lastPositionMs = positionMs;
       return;
     }
 
@@ -456,6 +563,7 @@ export function createPlaybackStore(): PlaybackStore {
       const gen = samplerGeneration;
       void preQueueUpcoming(gen).finally(() => { samplerBusy = false; });
       lastCurrentUri = currentUri;
+      lastPositionMs = positionMs;
       return;
     }
 
@@ -470,6 +578,7 @@ export function createPlaybackStore(): PlaybackStore {
     }
 
     lastCurrentUri = currentUri;
+    lastPositionMs = positionMs;
   }
 
   function stopSampling(): void {
@@ -524,6 +633,17 @@ export function createPlaybackStore(): PlaybackStore {
             const gen = samplerGeneration;
             const advanced = await postTimelineAction({ action: 'forward' });
             if (gen === samplerGeneration && advanced) timeline = advanced;
+          }
+          // Since immediate post-callPlay queue-pushes are the norm now,
+          // Spotify almost certainly still has the OLD upcoming[0] in its
+          // queue from the pre-reload play. Assume it does — mark the head as
+          // queued so the Queue UI locks it correctly, the next natural
+          // advance fires shouldObserveAdvance, and the lead-window fallback
+          // doesn't double-push. If we're wrong (queue was actually drained),
+          // the drain-recovery path in maybeAdvanceSampler will reseed when
+          // Spotify stops at track end.
+          if (timeline?.upcoming[0]) {
+            samplerQueuedUri = timeline.upcoming[0];
           }
         } finally {
           samplerBusy = false;
@@ -599,6 +719,8 @@ export function createPlaybackStore(): PlaybackStore {
       }
       timeline = tl;
       await callPlay({ uris: [tl.current] });
+      samplerQueuedUri = null;
+      queueUpcomingHeadAsync(gen);
     } finally {
       samplerBusy = false;
     }
@@ -614,12 +736,25 @@ export function createPlaybackStore(): PlaybackStore {
   }
   async function prev(): Promise<void> {
     if (!isSampling) await tryResumeSampler();
-    if (isSampling) { await moveCursor('back'); return; }
+    if (isSampling) {
+      // Match Spotify's native behavior: prev within the first 10s goes back a
+      // track; otherwise restart the current track. Keeps the in-app button
+      // and native PREV (lock screen / Bluetooth / app) in lockstep.
+      if (state.position_ms < POSITION_PREV_THRESHOLD_MS) {
+        await moveCursor('back');
+      } else {
+        await seek(0);
+      }
+      return;
+    }
     await callControl('previous');
   }
 
   async function seek(positionMs: number): Promise<void> {
     state = { ...state, position_ms: positionMs };
+    // Suppress native-PREV detection for the next few polls. Otherwise a
+    // scrub-to-zero would look identical to a Bluetooth prev press.
+    prevDetectionIgnoreUntil = Date.now() + SEEK_IGNORE_WINDOW_MS;
     await callControl('seek', positionMs);
   }
 
@@ -635,7 +770,9 @@ export function createPlaybackStore(): PlaybackStore {
     if (!isSampling) return;
     if (samplerBusy) return;
     samplerBusy = true;
-    const gen = samplerGeneration;
+    // Bump generation so any in-flight pushUpcomingHeadToSpotify whose snapshot
+    // of upcoming[0] is about to be stale will bail at its post-await gen check.
+    const gen = ++samplerGeneration;
     try {
       const tl = await postTimelineAction(body);
       if (gen !== samplerGeneration) return;

@@ -12,7 +12,7 @@
 
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import { Play, Star, Loader2, X, ChevronUp, ChevronDown } from '@lucide/svelte';
+  import { Play, Star, Loader2, X, GripVertical } from '@lucide/svelte';
   import type { PlaybackStore } from '$lib/playback/player.svelte';
 
   type Entry = {
@@ -246,16 +246,45 @@
     void playback.removeFromQueue(uri, index);
   }
 
-  function moveUp(index: number): void {
-    if (index <= 0) return;
-    // Can't move INTO slot 0 if it's locked.
-    if (firstRowLocked && index === 1) return;
-    void playback.reorderQueue(index, index - 1);
+  // ── Drag-and-drop reorder (HTML5; desktop pointer only) ──────────────
+  // Row index being dragged, and the row index it would land before/at on drop.
+  // Both null when no drag is in flight. Visual indicator is a top border on
+  // the dragOverIndex row.
+  let dragFromIndex = $state<number | null>(null);
+  let dragOverIndex = $state<number | null>(null);
+
+  function onDragStart(e: DragEvent, index: number): void {
+    if (firstRowLocked && index === 0) { e.preventDefault(); return; }
+    dragFromIndex = index;
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = 'move';
+      // Firefox needs data set or it ignores the drag entirely.
+      e.dataTransfer.setData('text/plain', String(index));
+    }
   }
 
-  function moveDown(index: number): void {
-    if (index >= upcoming.length - 1) return;
-    void playback.reorderQueue(index, index + 1);
+  function onDragOver(e: DragEvent, index: number): void {
+    if (dragFromIndex == null) return;
+    // Can't land into slot 0 when it's locked — the pre-queued URI must stay put.
+    if (firstRowLocked && index === 0) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+    if (dragOverIndex !== index) dragOverIndex = index;
+  }
+
+  function onDrop(e: DragEvent, index: number): void {
+    e.preventDefault();
+    const from = dragFromIndex;
+    dragFromIndex = null;
+    dragOverIndex = null;
+    if (from == null || from === index) return;
+    if (firstRowLocked && index === 0) return;
+    void playback.reorderQueue(from, index);
+  }
+
+  function onDragEnd(): void {
+    dragFromIndex = null;
+    dragOverIndex = null;
   }
 
   onMount(() => () => {
@@ -311,17 +340,30 @@
     {:else if upcoming.length === 0}
       <p class="text-xs text-white/50">Queue is empty.</p>
     {:else}
-      <div class="flex flex-col gap-1" data-testid="queue-list">
+      <div class="flex flex-col gap-1" role="list" data-testid="queue-list">
         {#each upcoming as uri, i (uri + ':' + i)}
           {@const meta = queueMeta.get(uri) ?? null}
           {@const locked = i === 0 && firstRowLocked}
+          {@const dragging = dragFromIndex === i}
+          {@const dropTarget = dragOverIndex === i && dragFromIndex !== i}
           <div
-            class="flex items-center gap-3 rounded-xl px-3 py-2 transition-colors {locked ? 'bg-white/[0.06] ring-1 ring-white/10' : 'hover:bg-white/[0.04]'}"
+            class="flex items-center gap-2 rounded-xl px-2 py-2 transition-colors {locked ? 'bg-white/[0.06] ring-1 ring-white/10' : 'hover:bg-white/[0.04]'} {dragging ? 'opacity-40' : ''} {dropTarget ? 'ring-2 ring-spotify-green/70' : ''}"
             data-testid="queue-row"
             data-uri={uri}
             data-locked={locked ? 'true' : 'false'}
+            role="listitem"
+            draggable={!locked}
+            ondragstart={(e) => onDragStart(e, i)}
+            ondragover={(e) => onDragOver(e, i)}
+            ondrop={(e) => onDrop(e, i)}
+            ondragend={onDragEnd}
           >
-            <span class="w-4 text-[10px] font-semibold {locked ? 'text-amber-300' : 'text-white/40'}">{i + 1}</span>
+            <span
+              class="flex w-5 shrink-0 items-center justify-center {locked ? 'text-amber-300' : 'cursor-grab text-white/30 active:cursor-grabbing'}"
+              aria-label={locked ? 'Locked — about to play' : 'Drag to reorder'}
+            >
+              <GripVertical class="size-4" />
+            </span>
             {#if meta?.albumArtUrl}
               <img src={meta.albumArtUrl} alt="" class="size-9 shrink-0 rounded-md object-cover shadow shadow-black/40" />
             {:else}
@@ -334,20 +376,6 @@
               </p>
             </div>
             {#if !locked}
-              <button
-                type="button"
-                aria-label="Move up"
-                disabled={i <= 0 || (firstRowLocked && i === 1)}
-                onclick={() => moveUp(i)}
-                class="text-white/30 hover:text-white/70 disabled:opacity-20"
-              ><ChevronUp class="size-4" /></button>
-              <button
-                type="button"
-                aria-label="Move down"
-                disabled={i >= upcoming.length - 1}
-                onclick={() => moveDown(i)}
-                class="text-white/30 hover:text-white/70 disabled:opacity-20"
-              ><ChevronDown class="size-4" /></button>
               <button
                 type="button"
                 aria-label="Remove from queue"

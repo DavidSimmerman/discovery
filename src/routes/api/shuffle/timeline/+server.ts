@@ -48,13 +48,11 @@ import {
   type DbExec,
 } from '$lib/server/shuffle/session-store';
 
-// Target queue depth: when refilling, we fill upcoming up to this count.
+// Target queue depth: keep upcoming at this count. After every forward we top
+// up by one (or more, if back-pressure drained it) so the Queue tab always
+// shows ~10 items ahead. The Queue UI relies on this — users expect "always
+// 10" rather than the previous low-water hysteresis (3→10 bursts).
 const TARGET_DEPTH = 10;
-// Low-water mark: we only *trigger* a refill when upcoming has fewer than this.
-// Keeping a hysteresis between LOW_WATER and TARGET avoids refilling on every
-// advance (a back→forward round-trip would otherwise churn sampler cooldowns
-// by re-picking on every forward press even when the queue is healthy).
-const REFILL_LOW_WATER = 3;
 // Safety budget for the refill loop so the sampler returning duplicates can't
 // spin forever. A handful of misses won't fill the queue; ~3× target is enough.
 const REFILL_MAX_ATTEMPTS = TARGET_DEPTH * 3;
@@ -219,9 +217,12 @@ export const POST: RequestHandler = async ({ locals, request }) => {
     //   1. If upcoming is empty, refill BEFORE advancing so there's something
     //      to move to (otherwise advance is a no-op and the cursor stalls).
     //   2. Advance.
-    //   3. If upcoming has fallen below the low-water mark, refill again to top
-    //      back up to target. The low-water gate stops back→forward round-trips
-    //      from churning sampler cooldowns on every press.
+    //   3. Refill back up to TARGET_DEPTH. Pre-2026-06: this used a low-water
+    //      hysteresis to skip refills on back→forward round-trips, but the user
+    //      wants the Queue tab to always show 10 — the round-trip cost (≤7 picks
+    //      on the first forward after a deeper drain) is acceptable. Once at
+    //      target, back→forward round-trips do no extra work (back grows
+    //      upcoming to 11, forward shrinks it back to 10).
     const isForward = body.action === 'advance' || body.action === 'forward';
     let candidatesCache: Candidate[] | null = null;
     async function getCandidates(): Promise<Candidate[]> {
@@ -237,7 +238,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
     const tl = applyAction(timelineOf(nextState), body);
     nextState = { ...nextState, timeline: tl };
 
-    if (isForward && tl.upcoming.length < REFILL_LOW_WATER) {
+    if (isForward && tl.upcoming.length < TARGET_DEPTH) {
       const refilled = refillToTarget(nextState, await getCandidates(), now);
       nextState = refilled.state;
     }

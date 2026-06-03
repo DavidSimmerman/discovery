@@ -108,6 +108,14 @@ export function createPlaybackStore(): PlaybackStore {
 
   let pollHandle: ReturnType<typeof setTimeout> | null = null;
 
+  // Spotify's currently-playing endpoint flaps to `null` for a poll or two
+  // between tracks, during ads, or when the device hands off — clobbering
+  // `state` on the first null unmounts everything under {#if playingForView}
+  // (LabelChips, OtherVersions) and they refetch on remount, causing a
+  // visible flicker every few seconds. Only clear after two consecutive nulls.
+  let consecutiveNulls = 0;
+  const NULL_THRESHOLD = 2;
+
   async function refresh(): Promise<void> {
     try {
       const res = await fetch('/api/spotify/currently-playing');
@@ -117,30 +125,46 @@ export function createPlaybackStore(): PlaybackStore {
       }
       const data = (await res.json()) as CurrentlyPlayingResponse;
       if (data.playing == null) {
-        state = { ...EMPTY_STATE };
+        consecutiveNulls++;
+        if (consecutiveNulls >= NULL_THRESHOLD && state.track != null) {
+          state = { ...EMPTY_STATE };
+        }
         return;
       }
+      consecutiveNulls = 0;
       const p = data.playing;
+      // Reuse the existing track object when the URI hasn't changed. Otherwise
+      // every poll hands children a new `track` reference, which fires every
+      // downstream $derived and $effect (LabelChips, OtherVersions, etc.).
+      const sameTrack = state.track?.uri === p.uri;
+      const track = sameTrack
+        ? state.track!
+        : {
+            uri: p.uri,
+            name: p.name,
+            artists: p.artists.map((name) => ({ name })),
+            album: {
+              name: p.album ?? '',
+              images: p.albumArtUrl ? [{ url: p.albumArtUrl }] : [],
+            },
+          };
       state = {
         paused: !p.isPlaying,
         position_ms: p.progressMs ?? 0,
         duration_ms: p.durationMs,
-        track: {
-          uri: p.uri,
-          name: p.name,
-          artists: p.artists.map((name) => ({ name })),
-          album: {
-            name: p.album ?? '',
-            images: p.albumArtUrl ? [{ url: p.albumArtUrl }] : [],
-          },
-        },
+        track,
         context_uri: p.contextUri,
         isrc: p.isrc,
       };
       // Keep the rating bridge populated so currentRating reflects truth.
+      // Only bump ratingTrigger when the value actually changes — otherwise
+      // every consumer of currentRating re-runs on every poll for no reason.
       if (typeof data.rating !== 'undefined') {
-        ratingByUri.set(p.uri, data.rating);
-        ratingTrigger++;
+        const prev = ratingByUri.get(p.uri);
+        if (prev !== data.rating) {
+          ratingByUri.set(p.uri, data.rating);
+          ratingTrigger++;
+        }
       }
       err = null;
     } catch {

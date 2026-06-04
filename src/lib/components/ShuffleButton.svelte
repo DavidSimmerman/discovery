@@ -28,8 +28,11 @@
     try {
       if (useSampler) {
         // Sampler mode plays one pick and then keeps Spotify's queue topped up,
-        // so playback advances automatically without further clicks.
-        await store.startSampler();
+        // so playback advances automatically without further clicks. reset:true
+        // wipes any existing virtual queue first — a Shuffle press is always a
+        // fresh start, which doubles as the "my queue got messed up, clear it"
+        // escape hatch.
+        await store.startSampler({ reset: true });
         return;
       }
       const uris = await getUris();

@@ -29,6 +29,7 @@ import {
   removeFromUpcoming,
   reorderUpcoming,
   refillTail,
+  emptyTimeline,
   type Timeline,
 } from '$lib/server/shuffle/timeline';
 import {
@@ -142,7 +143,7 @@ function refillToTarget(
 
 // Read body once; SvelteKit's request.json() consumes the stream.
 type Body =
-  | { action: 'advance' | 'forward' | 'back' }
+  | { action: 'advance' | 'forward' | 'back' | 'reset' }
   | { action: 'add'; uri: string; position?: number }
   | { action: 'remove'; uri: string; index?: number }
   | { action: 'reorder'; fromIndex: number; toIndex: number };
@@ -152,6 +153,12 @@ function applyAction(tl: Timeline, body: Body): Timeline {
     case 'advance':
     case 'forward': return advance(tl);
     case 'back':    return back(tl);
+    // Clear the whole timeline — history, current, and upcoming. The user hits
+    // this via the Shuffle button to wipe a queue they don't like. Cooldowns
+    // are intentionally NOT cleared (they live elsewhere in session state), so
+    // a fresh shuffle still avoids recently-played repeats. The client follows
+    // a reset with a forward to materialize a fresh first pick.
+    case 'reset':   return emptyTimeline();
     case 'add':     return addToUpcoming(tl, body.uri, body.position);
     case 'remove':  return removeFromUpcoming(tl, body.uri, body.index);
     case 'reorder': return reorderUpcoming(tl, body.fromIndex, body.toIndex);
@@ -174,6 +181,7 @@ function validate(body: unknown): Body {
     case 'advance':
     case 'forward':
     case 'back':
+    case 'reset':
       return { action: b.action };
     case 'add':
       if (typeof b.uri !== 'string') throw error(400, 'uri required');

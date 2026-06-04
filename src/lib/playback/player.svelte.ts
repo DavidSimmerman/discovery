@@ -400,26 +400,50 @@ export function createPlaybackStore(): PlaybackStore {
   //      Bluetooth / Spotify app) always has somewhere to go.
   // Re-checks generation before AND after the network call so a concurrent
   // skip can't leave us with samplerQueuedUri pointing at a now-stale URI.
+  // Tracks the URI an in-flight callQueue is currently pushing. Prevents the
+  // AfterPlay (800ms delayed) and AfterAdvance (immediate) paths from both
+  // POSTing the same URI when a natural advance lands during the delay window
+  // — without it, Spotify would get the same URI queued twice and play it
+  // back-to-back.
+  let queueInFlight: string | null = null;
   async function pushUpcomingHeadToSpotify(gen: number): Promise<void> {
     const next = timeline?.upcoming[0] ?? null;
     if (!next) return;
     if (gen !== samplerGeneration) return;
-    if (samplerQueuedUri === next) return; // already queued
-    const ok = await callQueue(next);
-    if (gen !== samplerGeneration || !ok) return;
-    // Re-check upcoming[0] after the await. mutateTimeline (remove/reorder)
-    // also bumps generation now, but this is a belt-and-braces guard against
-    // any future code path that mutates upcoming without a gen bump.
-    if (timeline?.upcoming[0] !== next) return;
-    samplerQueuedUri = next;
+    if (samplerQueuedUri === next || queueInFlight === next) return;
+    queueInFlight = next;
+    try {
+      const ok = await callQueue(next);
+      if (gen !== samplerGeneration || !ok) return;
+      // Re-check upcoming[0] after the await. mutateTimeline (remove/reorder)
+      // also bumps generation now, but this is a belt-and-braces guard against
+      // any future code path that mutates upcoming without a gen bump.
+      if (timeline?.upcoming[0] !== next) return;
+      samplerQueuedUri = next;
+    } finally {
+      if (queueInFlight === next) queueInFlight = null;
+    }
   }
   async function preQueueUpcoming(gen: number): Promise<void> {
+    // Lead-window fallback (track is ending naturally, no play call to race
+    // with). Push immediately.
     await pushUpcomingHeadToSpotify(gen);
   }
-  // Fire-and-forget queue push after every callPlay. Failing here is non-fatal
-  // — the lead-window fallback retries near track end. Not awaited so initial
-  // play isn't blocked on Spotify's queue endpoint.
-  function queueUpcomingHeadAsync(gen: number): void {
+  // Fire-and-forget queue push after a callPlay. Spotify's queue endpoint can
+  // race with the just-issued play: if we POST queue while the device is still
+  // transitioning into the new context, the URI may land in the old-context-
+  // being-replaced and silently disappear, leaving Spotify's queue empty and
+  // autoplay/Smart Shuffle filling in mid-session (the "song that isn't in my
+  // queue" symptom). Delay 800ms — past the 300ms chase refresh and well past
+  // typical device-transition latency. Failing here is non-fatal: the lead-
+  // window fallback retries near track end.
+  const POST_PLAY_QUEUE_DELAY_MS = 800;
+  function queueUpcomingHeadAfterPlay(gen: number): void {
+    setTimeout(() => { void pushUpcomingHeadToSpotify(gen); }, POST_PLAY_QUEUE_DELAY_MS);
+  }
+  // For natural advances (Spotify moved on its own — no callPlay), push
+  // immediately so native NEXT keeps working with minimal gap.
+  function queueUpcomingHeadAfterAdvance(gen: number): void {
     void pushUpcomingHeadToSpotify(gen);
   }
 
@@ -433,7 +457,7 @@ export function createPlaybackStore(): PlaybackStore {
     if (!tl || !tl.current) { stopSampling(); return; }
     timeline = tl;
     samplerQueuedUri = null;
-    queueUpcomingHeadAsync(gen);
+    queueUpcomingHeadAfterAdvance(gen);
   }
 
   async function startSampler(): Promise<void> {
@@ -461,7 +485,7 @@ export function createPlaybackStore(): PlaybackStore {
       if (gen !== samplerGeneration) return;
       if (!ok) { isSampling = false; timeline = null; return; }
       isSampling = true;
-      queueUpcomingHeadAsync(gen);
+      queueUpcomingHeadAfterPlay(gen);
     } finally {
       samplerBusy = false;
     }
@@ -483,7 +507,7 @@ export function createPlaybackStore(): PlaybackStore {
     if (gen !== samplerGeneration) return;
     if (!ok) { stopSampling(); return; }
     samplerQueuedUri = null;
-    queueUpcomingHeadAsync(gen);
+    queueUpcomingHeadAfterPlay(gen);
   }
 
   // Run after every poll. Four cases:
@@ -539,7 +563,7 @@ export function createPlaybackStore(): PlaybackStore {
         }
         timeline = tl;
         await callPlay({ uris: [tl.current] });
-        if (gen === samplerGeneration) queueUpcomingHeadAsync(gen);
+        if (gen === samplerGeneration) queueUpcomingHeadAfterPlay(gen);
       })().finally(() => { samplerBusy = false; });
       lastCurrentUri = currentUri;
       lastPositionMs = positionMs;
@@ -574,6 +598,31 @@ export function createPlaybackStore(): PlaybackStore {
       // Don't update lastCurrentUri yet — let the next poll see whether the
       // reseed succeeded. If it did, currentUri will be non-null. If not,
       // drain recovery should fire again.
+      return;
+    }
+
+    // External-skip / autoplay detection. If Spotify has moved on to a URI
+    // we don't recognize (not our current, not our pre-queued head, not
+    // anywhere in upcoming), some external mechanism took over — most often
+    // Spotify autoplay/Smart Shuffle filling in after our queue push failed,
+    // or the user skipped via a path we don't intercept. Stop sampling so the
+    // next in-app skip doesn't act on stale state. The user can restart with
+    // the shuffle button.
+    //
+    // Suppressed inside the prev-detection ignore window: callPlay sets that
+    // window, and during it Spotify may still report the OLD URI for a poll
+    // or two while transitioning into the new context. Without this guard
+    // every callPlay would risk a spurious stopSampling.
+    if (
+      currentUri != null &&
+      currentUri !== timeline?.current &&
+      currentUri !== samplerQueuedUri &&
+      !timeline?.upcoming.includes(currentUri) &&
+      Date.now() > prevDetectionIgnoreUntil
+    ) {
+      stopSampling();
+      lastCurrentUri = currentUri;
+      lastPositionMs = positionMs;
       return;
     }
 
@@ -720,7 +769,7 @@ export function createPlaybackStore(): PlaybackStore {
       timeline = tl;
       await callPlay({ uris: [tl.current] });
       samplerQueuedUri = null;
-      queueUpcomingHeadAsync(gen);
+      queueUpcomingHeadAfterPlay(gen);
     } finally {
       samplerBusy = false;
     }

@@ -1,6 +1,7 @@
 <script lang="ts">
   import StarRating from '$lib/components/StarRating.svelte';
   import { ExternalLink } from '@lucide/svelte';
+  import { spotifyTrackUrl } from '$lib/spotifyLink';
 
   type Playing = {
     uri: string;
@@ -23,12 +24,7 @@
 
   let { playing, rating, loading, onrate }: Props = $props();
 
-  // open.spotify.com track link — opens the Spotify app on mobile (universal
-  // link) or the web/desktop player otherwise.
-  const spotifyUrl = $derived.by(() => {
-    const m = playing?.uri.match(/^spotify:track:([A-Za-z0-9]+)$/);
-    return m ? `https://open.spotify.com/track/${m[1]}` : null;
-  });
+  const spotifyUrl = $derived(spotifyTrackUrl(playing?.uri));
 </script>
 
 {#if loading && !playing}

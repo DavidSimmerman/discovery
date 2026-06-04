@@ -13,16 +13,9 @@
 
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import { Play, Star, Loader2, ExternalLink } from '@lucide/svelte';
+  import { Play, Star, Loader2 } from '@lucide/svelte';
+  import OpenInSpotifyLink from '$lib/components/OpenInSpotifyLink.svelte';
   import type { PlaybackStore } from '$lib/playback/player.svelte';
-
-  // open.spotify.com track link — opens the Spotify app on mobile (universal
-  // link) or the web/desktop player otherwise. Returns null for non-track URIs.
-  function spotifyUrl(uri: string | null | undefined): string | null {
-    if (!uri) return null;
-    const m = uri.match(/^spotify:track:([A-Za-z0-9]+)$/);
-    return m ? `https://open.spotify.com/track/${m[1]}` : null;
-  }
 
   type Entry = {
     uri: string;
@@ -324,7 +317,6 @@
       <div class="flex flex-col gap-1" role="list" data-testid="queue-list">
         {#each spotifyQueue.slice(0, 30) as item, i (item.uri + ':' + i)}
           {@const meta = queueMeta.get(item.uri) ?? null}
-          {@const link = spotifyUrl(item.uri)}
           <div
             class="flex items-center gap-2 rounded-xl px-2 py-2 transition-colors hover:bg-white/[0.04]"
             role="listitem"
@@ -341,16 +333,7 @@
               <p class="truncate text-sm font-semibold">{item.name ?? meta?.title ?? 'Track'}</p>
               <p class="truncate text-[11px] text-white/50">{item.artists.join(', ') || (meta?.artists?.join(', ') ?? '')}</p>
             </div>
-            {#if link}
-              <a
-                href={link}
-                target="_blank"
-                rel="noopener noreferrer"
-                aria-label="Open in Spotify"
-                title="Open in Spotify"
-                class="text-white/30 hover:text-spotify-green"
-              ><ExternalLink class="size-4" /></a>
-            {/if}
+            <OpenInSpotifyLink uri={item.uri} />
           </div>
         {/each}
       </div>
@@ -373,31 +356,34 @@
           {#each versionsData.library as v (v.uri)}
             {@const playingHere = playback.state.track?.uri === v.uri}
             {@const label = versionLabel(v)}
-            <button
-              type="button"
-              onclick={() => {
-                if (v.rating == null) playEntry(v.uri);
-                else void goto(`/library/track/${encodeURIComponent(v.uri)}`);
-              }}
-              disabled={v.uri === trackUri}
-              class="flex items-center gap-3 rounded-xl bg-white/[0.04] p-2 text-left transition-colors hover:bg-white/[0.08] disabled:opacity-40"
-            >
-              {#if v.albumArtUrl}
-                <img src={v.albumArtUrl} alt="" class="size-10 shrink-0 rounded-md object-cover shadow shadow-black/40" />
-              {:else}
-                <div class="size-10 shrink-0 rounded-md bg-white/10"></div>
-              {/if}
-              <div class="min-w-0 flex-1">
-                <div class="truncate text-sm font-medium {playingHere ? 'text-spotify-green' : 'text-white'}">{v.title}</div>
-                {#if label}<div class="truncate text-[10px] text-white/45">{label}</div>{/if}
-              </div>
-              {#if v.rating != null && v.rating > 0}
-                <span class="flex items-center gap-0.5 text-spotify-green">
-                  <Star class="size-3.5 fill-current" />
-                  <span class="text-sm font-bold tabular-nums">{v.rating}</span>
-                </span>
-              {/if}
-            </button>
+            <div class="flex items-center gap-1">
+              <button
+                type="button"
+                onclick={() => {
+                  if (v.rating == null) playEntry(v.uri);
+                  else void goto(`/library/track/${encodeURIComponent(v.uri)}`);
+                }}
+                disabled={v.uri === trackUri}
+                class="flex min-w-0 flex-1 items-center gap-3 rounded-xl bg-white/[0.04] p-2 text-left transition-colors hover:bg-white/[0.08] disabled:opacity-40"
+              >
+                {#if v.albumArtUrl}
+                  <img src={v.albumArtUrl} alt="" class="size-10 shrink-0 rounded-md object-cover shadow shadow-black/40" />
+                {:else}
+                  <div class="size-10 shrink-0 rounded-md bg-white/10"></div>
+                {/if}
+                <div class="min-w-0 flex-1">
+                  <div class="truncate text-sm font-medium {playingHere ? 'text-spotify-green' : 'text-white'}">{v.title}</div>
+                  {#if label}<div class="truncate text-[10px] text-white/45">{label}</div>{/if}
+                </div>
+                {#if v.rating != null && v.rating > 0}
+                  <span class="flex items-center gap-0.5 text-spotify-green">
+                    <Star class="size-3.5 fill-current" />
+                    <span class="text-sm font-bold tabular-nums">{v.rating}</span>
+                  </span>
+                {/if}
+              </button>
+              <OpenInSpotifyLink uri={v.uri} />
+            </div>
           {/each}
         </div>
       {/if}
@@ -423,6 +409,7 @@
                 aria-label="Play"
                 class="flex items-center gap-1 rounded-full bg-white/10 px-2.5 py-1 text-[11px] font-medium hover:bg-white/15"
               ><Play class="size-3 fill-current" />Play</button>
+              <OpenInSpotifyLink uri={v.uri} />
             </div>
           {/each}
         </div>
@@ -444,30 +431,33 @@
       <div class="flex flex-col gap-1" data-testid="artist-list">
         {#each artistData as row (row.uri)}
           {@const playingHere = playback.state.track?.uri === row.uri}
-          <button
-            type="button"
-            onclick={() => { if (!playingHere) playEntry(row.uri); }}
-            disabled={playingHere}
-            class="flex items-center gap-3 rounded-xl bg-white/[0.03] p-2 text-left transition-colors hover:bg-white/[0.06] disabled:cursor-default disabled:bg-white/[0.06]"
-          >
-            {#if row.albumArtUrl}
-              <img src={row.albumArtUrl} alt="" class="size-10 shrink-0 rounded-md object-cover shadow shadow-black/40" />
-            {:else}
-              <div class="size-10 shrink-0 rounded-md bg-white/10"></div>
-            {/if}
-            <div class="min-w-0 flex-1">
-              <div class="truncate text-sm font-medium {playingHere ? 'text-spotify-green' : 'text-white'}">{row.title ?? 'Track'}</div>
-              <div class="truncate text-[10px] text-white/45">
-                {row.album ?? ''}{row.album ? ' · ' : ''}{row.plays} {row.plays === 1 ? 'play' : 'plays'}{#if playingHere} · <span class="text-spotify-green">now playing</span>{/if}
+          <div class="flex items-center gap-1">
+            <button
+              type="button"
+              onclick={() => { if (!playingHere) playEntry(row.uri); }}
+              disabled={playingHere}
+              class="flex min-w-0 flex-1 items-center gap-3 rounded-xl bg-white/[0.03] p-2 text-left transition-colors hover:bg-white/[0.06] disabled:cursor-default disabled:bg-white/[0.06]"
+            >
+              {#if row.albumArtUrl}
+                <img src={row.albumArtUrl} alt="" class="size-10 shrink-0 rounded-md object-cover shadow shadow-black/40" />
+              {:else}
+                <div class="size-10 shrink-0 rounded-md bg-white/10"></div>
+              {/if}
+              <div class="min-w-0 flex-1">
+                <div class="truncate text-sm font-medium {playingHere ? 'text-spotify-green' : 'text-white'}">{row.title ?? 'Track'}</div>
+                <div class="truncate text-[10px] text-white/45">
+                  {row.album ?? ''}{row.album ? ' · ' : ''}{row.plays} {row.plays === 1 ? 'play' : 'plays'}{#if playingHere} · <span class="text-spotify-green">now playing</span>{/if}
+                </div>
               </div>
-            </div>
-            {#if row.rating != null && row.rating > 0}
-              <span class="flex items-center gap-0.5 text-spotify-green">
-                <Star class="size-3.5 fill-current" />
-                <span class="text-sm font-bold tabular-nums">{row.rating}</span>
-              </span>
-            {/if}
-          </button>
+              {#if row.rating != null && row.rating > 0}
+                <span class="flex items-center gap-0.5 text-spotify-green">
+                  <Star class="size-3.5 fill-current" />
+                  <span class="text-sm font-bold tabular-nums">{row.rating}</span>
+                </span>
+              {/if}
+            </button>
+            <OpenInSpotifyLink uri={row.uri} />
+          </div>
         {/each}
       </div>
     {/if}
@@ -510,6 +500,7 @@
               aria-label="Play"
               class="flex items-center gap-1 rounded-full bg-white/10 px-2.5 py-1 text-[11px] font-medium hover:bg-white/15"
             ><Play class="size-3 fill-current" />Play</button>
+            <OpenInSpotifyLink uri={v.uri} />
           </div>
         {/each}
       </div>

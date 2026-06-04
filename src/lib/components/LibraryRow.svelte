@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Star } from '@lucide/svelte';
+  import OpenInSpotifyLink from '$lib/components/OpenInSpotifyLink.svelte';
 
   type Row = {
     uri: string;
@@ -64,5 +65,6 @@
         <span class="text-sm font-bold tabular-nums">{ratingText}</span>
       </span>
     {/if}
+    <OpenInSpotifyLink uri={row.uri} />
   </div>
 </div>

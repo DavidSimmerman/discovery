@@ -1,19 +1,28 @@
 <script lang="ts">
-  // Tabbed panel that lives on /now-playing under the transport. Replaces the
-  // standalone OtherVersions section. Four tabs:
-  //   queue    — virtual timeline upcoming (visible only while sampler runs)
-  //   versions — same data as the old OtherVersions: library + catalog
+  // Tabbed panel that lives on /now-playing under the transport. Four tabs:
+  //   queue    — Spotify's REAL live queue (read-only; car mode hands Spotify a
+  //              real context, so its queue is the source of truth — edits happen
+  //              in Spotify itself). Visible only while sampling.
+  //   versions — library + catalog versions of the current track
   //   artist   — primary artist's top tracks in the user's library (rating + plays)
   //   covers   — MusicBrainz-backed covers; kept lazy (external hop)
   //
-  // Tab click triggers the fetch for that tab (cached per uri). Counts for
-  // versions + artist preload on track change so the tab pills show numbers
-  // without the user opening them. Covers stays uncounted by design.
+  // Tab click triggers the fetch for that tab. Counts for versions + artist
+  // preload on track change so the tab pills show numbers without the user
+  // opening them. Covers stays uncounted by design.
 
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import { Play, Star, Loader2, X, GripVertical } from '@lucide/svelte';
+  import { Play, Star, Loader2, ExternalLink } from '@lucide/svelte';
   import type { PlaybackStore } from '$lib/playback/player.svelte';
+
+  // open.spotify.com track link — opens the Spotify app on mobile (universal
+  // link) or the web/desktop player otherwise. Returns null for non-track URIs.
+  function spotifyUrl(uri: string | null | undefined): string | null {
+    if (!uri) return null;
+    const m = uri.match(/^spotify:track:([A-Za-z0-9]+)$/);
+    return m ? `https://open.spotify.com/track/${m[1]}` : null;
+  }
 
   type Entry = {
     uri: string;
@@ -43,6 +52,8 @@
     albumArtUrl: string | null;
   };
 
+  type SpotifyQueueItem = { uri: string; name: string | null; artists: string[] };
+
   type Tab = 'queue' | 'versions' | 'artist' | 'covers';
 
   let {
@@ -64,31 +75,26 @@
   let covers = $state<Entry[]>([]);
   let coverError = $state<string | null>(null);
 
-  // Track metadata for upcoming URIs (queue tab).
+  // Spotify's REAL live queue (read-only). queueMeta holds album art hydrated
+  // from our tracks table (the Spotify queue endpoint returns name+artists but
+  // no art).
+  type QueueState = 'idle' | 'loading' | 'done' | 'error';
+  let spotifyQueue = $state<SpotifyQueueItem[]>([]);
+  let queueState = $state<QueueState>('idle');
   let queueMeta = $state<Map<string, TrackMeta>>(new Map());
-  let queueMetaLoading = $state(false);
 
   // Per-tab fetch controllers so a track-change abort doesn't leak.
   let versionsAc: AbortController | null = null;
   let artistAc: AbortController | null = null;
   let queueAc: AbortController | null = null;
+  let queueMetaAc: AbortController | null = null;
 
   const isSampling = $derived(playback.isSampling);
-  const upcoming = $derived(playback.timeline?.upcoming ?? []);
   const versionsCount = $derived(
     versionsData ? versionsData.library.length + versionsData.catalog.length : null,
   );
   const artistCount = $derived(artistData ? artistData.length : null);
-  const queueCount = $derived(upcoming.length);
-
-  // upcoming[0] is locked once we've actually pushed it into Spotify's queue.
-  // Using samplerQueuedUri (not "remainingMs < 5s") as the truth source matters
-  // because a user can seek backward after pre-queue fires — remainingMs would
-  // climb back over the threshold, but the URI is still queued in Spotify and
-  // removing it locally would desync the cursor at natural advance.
-  const firstRowLocked = $derived(
-    playback.samplerQueuedUri != null && upcoming[0] === playback.samplerQueuedUri,
-  );
+  const queueCount = $derived(queueState === 'done' ? spotifyQueue.length : null);
 
   // Reload preloads + reset lazy state when the source track changes. Guard on
   // loadedFor so we don't re-fire when trackUri reactive churn fires the effect
@@ -100,17 +106,8 @@
     resetForUri();
     void loadVersions(uri);
     void loadArtist(artistName);
-  });
-
-  // Hydrate queue metadata whenever upcoming changes. Diff against the existing
-  // map and only fetch URIs we haven't seen — keeps reorders/single-removes from
-  // refetching the whole queue. Failures fall back to nulls (rendered as "Track").
-  $effect(() => {
-    const uris = upcoming;
-    if (uris.length === 0) return;
-    const missing = uris.filter((u) => !queueMeta.has(u));
-    if (missing.length === 0) return;
-    void hydrateQueue(missing);
+    // Refresh Spotify's queue too — it shifts as playback advances.
+    if (isSampling) void loadSpotifyQueue();
   });
 
   // Default tab follows sampler state: sampling → queue, otherwise → versions.
@@ -177,25 +174,44 @@
     }
   }
 
-  async function hydrateQueue(missing: readonly string[]): Promise<void> {
+  async function loadSpotifyQueue(): Promise<void> {
     queueAc?.abort();
     const ac = new AbortController();
     queueAc = ac;
-    queueMetaLoading = true;
+    if (spotifyQueue.length === 0) queueState = 'loading';
+    try {
+      const res = await fetch('/api/spotify/queue', { signal: ac.signal });
+      if (queueAc !== ac) return;
+      if (!res.ok) { queueState = 'error'; return; }
+      const data = (await res.json()) as { queue: SpotifyQueueItem[] };
+      if (queueAc !== ac) return;
+      spotifyQueue = (data.queue ?? []).filter((t) => t.uri);
+      queueState = 'done';
+      // Hydrate album art for any queue URIs we don't have yet.
+      const missing = spotifyQueue.map((t) => t.uri).filter((u) => !queueMeta.has(u));
+      if (missing.length > 0) void hydrateArt(missing);
+    } catch (e) {
+      if ((e as { name?: string })?.name === 'AbortError') return;
+      if (queueAc === ac) queueState = 'error';
+    }
+  }
+
+  async function hydrateArt(missing: readonly string[]): Promise<void> {
+    queueMetaAc?.abort();
+    const ac = new AbortController();
+    queueMetaAc = ac;
     try {
       const res = await fetch(
-        `/api/tracks?uris=${encodeURIComponent(missing.join(','))}`,
+        `/api/tracks?uris=${encodeURIComponent(missing.slice(0, 50).join(','))}`,
         { signal: ac.signal },
       );
-      if (!res.ok) return;
+      if (queueMetaAc !== ac || !res.ok) return;
       const data = (await res.json()) as { tracks: TrackMeta[] };
       const next = new Map(queueMeta);
       for (const t of data.tracks) next.set(t.uri, t);
       queueMeta = next;
     } catch {
-      /* leave nulls, queue rows will fall back to "Track" */
-    } finally {
-      if (queueAc === ac) queueMetaLoading = false;
+      /* art is best-effort; rows fall back to a placeholder box */
     }
   }
 
@@ -225,8 +241,8 @@
   function pickTab(tab: Tab): void {
     userPickedTab = true;
     activeTab = tab;
-    // Tab-click as fetch trigger: covers loads here (lazy), the rest are already
-    // preloaded but we still call as a no-op safety in case of failure-and-retry.
+    // Tab-click as fetch trigger.
+    if (tab === 'queue') void loadSpotifyQueue();
     if (tab === 'covers' && coverState === 'idle') void loadCovers();
     if (tab === 'versions' && versionsData == null) void loadVersions(trackUri);
     if (tab === 'artist' && artistData == null) void loadArtist(artistName);
@@ -241,56 +257,11 @@
     return e.album ?? '';
   }
 
-  function removeUpcoming(uri: string, index: number): void {
-    if (firstRowLocked && index === 0) return;
-    void playback.removeFromQueue(uri, index);
-  }
-
-  // ── Drag-and-drop reorder (HTML5; desktop pointer only) ──────────────
-  // Row index being dragged, and the row index it would land before/at on drop.
-  // Both null when no drag is in flight. Visual indicator is a top border on
-  // the dragOverIndex row.
-  let dragFromIndex = $state<number | null>(null);
-  let dragOverIndex = $state<number | null>(null);
-
-  function onDragStart(e: DragEvent, index: number): void {
-    if (firstRowLocked && index === 0) { e.preventDefault(); return; }
-    dragFromIndex = index;
-    if (e.dataTransfer) {
-      e.dataTransfer.effectAllowed = 'move';
-      // Firefox needs data set or it ignores the drag entirely.
-      e.dataTransfer.setData('text/plain', String(index));
-    }
-  }
-
-  function onDragOver(e: DragEvent, index: number): void {
-    if (dragFromIndex == null) return;
-    // Can't land into slot 0 when it's locked — the pre-queued URI must stay put.
-    if (firstRowLocked && index === 0) return;
-    e.preventDefault();
-    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
-    if (dragOverIndex !== index) dragOverIndex = index;
-  }
-
-  function onDrop(e: DragEvent, index: number): void {
-    e.preventDefault();
-    const from = dragFromIndex;
-    dragFromIndex = null;
-    dragOverIndex = null;
-    if (from == null || from === index) return;
-    if (firstRowLocked && index === 0) return;
-    void playback.reorderQueue(from, index);
-  }
-
-  function onDragEnd(): void {
-    dragFromIndex = null;
-    dragOverIndex = null;
-  }
-
   onMount(() => () => {
     versionsAc?.abort();
     artistAc?.abort();
     queueAc?.abort();
+    queueMetaAc?.abort();
   });
 </script>
 
@@ -333,56 +304,52 @@
     </button>
   </div>
 
-  <!-- ─── QUEUE ─────────────────────────────────────────────────── -->
+  <!-- ─── QUEUE (Spotify's live queue, read-only) ──────────────────── -->
   {#if activeTab === 'queue'}
     {#if !isSampling}
       <p class="text-xs text-white/50">Start a shuffle to build a queue.</p>
-    {:else if upcoming.length === 0}
+    {:else if queueState === 'loading'}
+      <div class="flex items-center gap-2 text-xs text-white/45">
+        <Loader2 class="size-3.5 animate-spin" />
+        Loading queue…
+      </div>
+    {:else if queueState === 'error'}
+      <p class="text-xs text-red-400">Couldn't load the queue.</p>
+    {:else if spotifyQueue.length === 0}
       <p class="text-xs text-white/50">Queue is empty.</p>
     {:else}
+      <p class="px-1 text-[10px] font-semibold uppercase tracking-wider text-white/40">
+        Up next · edit in Spotify
+      </p>
       <div class="flex flex-col gap-1" role="list" data-testid="queue-list">
-        {#each upcoming as uri, i (uri + ':' + i)}
-          {@const meta = queueMeta.get(uri) ?? null}
-          {@const locked = i === 0 && firstRowLocked}
-          {@const dragging = dragFromIndex === i}
-          {@const dropTarget = dragOverIndex === i && dragFromIndex !== i}
+        {#each spotifyQueue.slice(0, 30) as item, i (item.uri + ':' + i)}
+          {@const meta = queueMeta.get(item.uri) ?? null}
+          {@const link = spotifyUrl(item.uri)}
           <div
-            class="flex items-center gap-2 rounded-xl px-2 py-2 transition-colors {locked ? 'bg-white/[0.06] ring-1 ring-white/10' : 'hover:bg-white/[0.04]'} {dragging ? 'opacity-40' : ''} {dropTarget ? 'ring-2 ring-spotify-green/70' : ''}"
-            data-testid="queue-row"
-            data-uri={uri}
-            data-locked={locked ? 'true' : 'false'}
+            class="flex items-center gap-2 rounded-xl px-2 py-2 transition-colors hover:bg-white/[0.04]"
             role="listitem"
-            draggable={!locked}
-            ondragstart={(e) => onDragStart(e, i)}
-            ondragover={(e) => onDragOver(e, i)}
-            ondrop={(e) => onDrop(e, i)}
-            ondragend={onDragEnd}
+            data-testid="queue-row"
+            data-uri={item.uri}
           >
-            <span
-              class="flex w-5 shrink-0 items-center justify-center {locked ? 'text-amber-300' : 'cursor-grab text-white/30 active:cursor-grabbing'}"
-              aria-label={locked ? 'Locked — about to play' : 'Drag to reorder'}
-            >
-              <GripVertical class="size-4" />
-            </span>
+            <span class="w-5 shrink-0 text-center text-[10px] font-semibold text-white/30">{i + 1}</span>
             {#if meta?.albumArtUrl}
               <img src={meta.albumArtUrl} alt="" class="size-9 shrink-0 rounded-md object-cover shadow shadow-black/40" />
             {:else}
               <div class="size-9 shrink-0 rounded-md bg-white/10"></div>
             {/if}
             <div class="min-w-0 flex-1">
-              <p class="truncate text-sm font-semibold">{meta?.title ?? 'Track'}</p>
-              <p class="truncate text-[11px] {locked ? 'text-amber-300/80' : 'text-white/50'}">
-                {#if locked}about to play · locked{:else}{meta?.artists?.join(', ') ?? ''}{/if}
-              </p>
+              <p class="truncate text-sm font-semibold">{item.name ?? meta?.title ?? 'Track'}</p>
+              <p class="truncate text-[11px] text-white/50">{item.artists.join(', ') || (meta?.artists?.join(', ') ?? '')}</p>
             </div>
-            {#if !locked}
-              <button
-                type="button"
-                aria-label="Remove from queue"
-                data-testid="queue-remove"
-                onclick={() => removeUpcoming(uri, i)}
-                class="text-white/30 hover:text-white/70"
-              ><X class="size-4" /></button>
+            {#if link}
+              <a
+                href={link}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="Open in Spotify"
+                title="Open in Spotify"
+                class="text-white/30 hover:text-spotify-green"
+              ><ExternalLink class="size-4" /></a>
             {/if}
           </div>
         {/each}

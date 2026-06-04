@@ -30,6 +30,7 @@ import {
   reorderUpcoming,
   refillTail,
   emptyTimeline,
+  syncTo,
   type Timeline,
 } from '$lib/server/shuffle/timeline';
 import {
@@ -49,11 +50,11 @@ import {
   type DbExec,
 } from '$lib/server/shuffle/session-store';
 
-// Target queue depth: keep upcoming at this count. After every forward we top
-// up by one (or more, if back-pressure drained it) so the Queue tab always
-// shows ~10 items ahead. The Queue UI relies on this — users expect "always
-// 10" rather than the previous low-water hysteresis (3→10 bursts).
-const TARGET_DEPTH = 10;
+// Target queue depth. Car mode pushes [current, ...upcoming] as a real Spotify
+// context, so this doubles as the push depth: Spotify gets ~50 tracks of runway
+// for native NEXT/PREV before we have to re-push. Deep enough that most sessions
+// never drain it; the client re-pushes (one sub-second re-seek) when low.
+const TARGET_DEPTH = 50;
 // Safety budget for the refill loop so the sampler returning duplicates can't
 // spin forever. A handful of misses won't fill the queue; ~3× target is enough.
 const REFILL_MAX_ATTEMPTS = TARGET_DEPTH * 3;
@@ -144,6 +145,7 @@ function refillToTarget(
 // Read body once; SvelteKit's request.json() consumes the stream.
 type Body =
   | { action: 'advance' | 'forward' | 'back' | 'reset' }
+  | { action: 'sync'; uri: string }
   | { action: 'add'; uri: string; position?: number }
   | { action: 'remove'; uri: string; index?: number }
   | { action: 'reorder'; fromIndex: number; toIndex: number };
@@ -153,6 +155,9 @@ function applyAction(tl: Timeline, body: Body): Timeline {
     case 'advance':
     case 'forward': return advance(tl);
     case 'back':    return back(tl);
+    // Car mode: follow Spotify's native playback by syncing the cursor to the
+    // URI it actually landed on.
+    case 'sync':    return syncTo(tl, body.uri);
     // Clear the whole timeline — history, current, and upcoming. The user hits
     // this via the Shuffle button to wipe a queue they don't like. Cooldowns
     // are intentionally NOT cleared (they live elsewhere in session state), so
@@ -183,6 +188,9 @@ function validate(body: unknown): Body {
     case 'back':
     case 'reset':
       return { action: b.action };
+    case 'sync':
+      if (typeof b.uri !== 'string') throw error(400, 'uri required');
+      return { action: 'sync', uri: b.uri };
     case 'add':
       if (typeof b.uri !== 'string') throw error(400, 'uri required');
       if (b.position != null && !isNonNegInt(b.position)) throw error(400, 'position must be a non-negative integer');
@@ -231,7 +239,11 @@ export const POST: RequestHandler = async ({ locals, request }) => {
     //      on the first forward after a deeper drain) is acceptable. Once at
     //      target, back→forward round-trips do no extra work (back grows
     //      upcoming to 11, forward shrinks it back to 10).
+    // Forward AND sync shrink upcoming (sync folds skipped tracks into history
+    // when following Spotify forward), so both top the queue back up. back/add/
+    // remove/reorder don't shrink upcoming, so they never refill.
     const isForward = body.action === 'advance' || body.action === 'forward';
+    const shouldRefill = isForward || body.action === 'sync';
     let candidatesCache: Candidate[] | null = null;
     async function getCandidates(): Promise<Candidate[]> {
       if (candidatesCache == null) candidatesCache = await loadCandidates(tx, userId);
@@ -246,7 +258,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
     const tl = applyAction(timelineOf(nextState), body);
     nextState = { ...nextState, timeline: tl };
 
-    if (isForward && tl.upcoming.length < TARGET_DEPTH) {
+    if (shouldRefill && tl.upcoming.length < TARGET_DEPTH) {
       const refilled = refillToTarget(nextState, await getCandidates(), now);
       nextState = refilled.state;
     }

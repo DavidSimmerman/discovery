@@ -1,5 +1,6 @@
 <script lang="ts">
   import StarRating from '$lib/components/StarRating.svelte';
+  import { ExternalLink } from '@lucide/svelte';
 
   type Playing = {
     uri: string;
@@ -21,6 +22,13 @@
   };
 
   let { playing, rating, loading, onrate }: Props = $props();
+
+  // open.spotify.com track link — opens the Spotify app on mobile (universal
+  // link) or the web/desktop player otherwise.
+  const spotifyUrl = $derived.by(() => {
+    const m = playing?.uri.match(/^spotify:track:([A-Za-z0-9]+)$/);
+    return m ? `https://open.spotify.com/track/${m[1]}` : null;
+  });
 </script>
 
 {#if loading && !playing}
@@ -53,6 +61,17 @@
     <div class="flex w-full max-w-xs flex-col items-center gap-1">
       <h2 class="text-2xl font-extrabold leading-tight text-balance break-words">{playing.name}</h2>
       <p class="text-sm text-white/70 text-balance break-words">{playing.artists.join(', ')}</p>
+      {#if spotifyUrl}
+        <a
+          href={spotifyUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          class="mt-1 inline-flex items-center gap-1.5 rounded-full bg-white/[0.06] px-3 py-1 text-xs font-medium text-white/70 transition-colors hover:bg-white/10 hover:text-spotify-green"
+        >
+          <ExternalLink class="size-3.5" />
+          Open in Spotify
+        </a>
+      {/if}
     </div>
 
     <StarRating interactive value={rating ?? 0} size={42} onchange={onrate} />

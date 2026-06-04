@@ -8,6 +8,7 @@ import {
   reorderUpcoming,
   refillTail,
   emptyTimeline,
+  syncTo,
   type Timeline,
 } from '$lib/server/shuffle/timeline';
 
@@ -172,5 +173,50 @@ describe('refillTail', () => {
   it('does not dedupe against history (replays are fine after a cooldown)', () => {
     const before = t(['A', 'B'], 'C', []);
     expect(refillTail(before, ['A'])).toEqual(t(['A', 'B'], 'C', ['A']));
+  });
+});
+
+describe('syncTo', () => {
+  it('no-op when uri is already current', () => {
+    const tl = t(['A'], 'B', ['C', 'D']);
+    expect(syncTo(tl, 'B')).toEqual(tl);
+  });
+
+  it('advances forward, folding skipped tracks into history', () => {
+    // Spotify skipped ahead to D; A,B(current),C all become history.
+    const tl = t(['A'], 'B', ['C', 'D', 'E']);
+    expect(syncTo(tl, 'D')).toEqual(t(['A', 'B', 'C'], 'D', ['E']));
+  });
+
+  it('advances to the immediate next (single native skip)', () => {
+    const tl = t(['A'], 'B', ['C', 'D']);
+    expect(syncTo(tl, 'C')).toEqual(t(['A', 'B'], 'C', ['D']));
+  });
+
+  it('rewinds, folding current + skipped back into upcoming (native PREV)', () => {
+    const tl = t(['A', 'B'], 'C', ['D']);
+    expect(syncTo(tl, 'B')).toEqual(t(['A'], 'B', ['C', 'D']));
+  });
+
+  it('rewinds multiple steps', () => {
+    const tl = t(['A', 'B', 'C'], 'D', ['E']);
+    expect(syncTo(tl, 'A')).toEqual(t([], 'A', ['B', 'C', 'D', 'E']));
+  });
+
+  it('returns unchanged when uri is nowhere in the timeline (divergence)', () => {
+    const tl = t(['A'], 'B', ['C']);
+    expect(syncTo(tl, 'Z')).toEqual(tl);
+  });
+
+  it('forward sync prefers the nearest upcoming occurrence on duplicates', () => {
+    const tl = t([], 'A', ['B', 'C', 'B']);
+    expect(syncTo(tl, 'B')).toEqual(t(['A'], 'B', ['C', 'B']));
+  });
+
+  it('rewinds to the history occurrence when a duplicate also exists ahead (native PREV)', () => {
+    // B is the immediate previous track (history end, distance 0) AND appears
+    // again far ahead in upcoming. A single-step PREV must rewind, not jump fwd.
+    const tl = t(['A', 'B'], 'X', ['C', 'B']);
+    expect(syncTo(tl, 'B')).toEqual(t(['A'], 'B', ['X', 'C', 'B']));
   });
 });

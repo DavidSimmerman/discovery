@@ -89,6 +89,47 @@ export function reorderUpcoming(tl: Timeline, fromIndex: number, toIndex: number
   return { ...tl, upcoming };
 }
 
+// Sync the cursor so `current` becomes `uri`. Used by car mode: Spotify drives
+// playback through the pushed context and we follow by observing which URI it
+// landed on. Three cases:
+//   • uri is ahead in upcoming  → advance: skipped tracks fold into history
+//   • uri is behind in history  → rewind:  current + skipped tracks fold into upcoming
+//   • uri is nowhere            → return unchanged (caller treats as divergence)
+// When `uri` appears on BOTH sides (a duplicate straddling the cursor), pick the
+// occurrence NEAREST the cursor — a single-step native PREV lands on the last
+// history item (distance 0) and must not be mistaken for a forward jump to a
+// far-ahead duplicate. Ties favor forward (NEXT is the common case).
+export function syncTo(tl: Timeline, uri: string): Timeline {
+  if (tl.current === uri) return tl;
+
+  const aheadIdx = tl.upcoming.indexOf(uri); // forward distance == aheadIdx
+  const behindIdx = tl.history.lastIndexOf(uri);
+  const behindDist = behindIdx === -1 ? -1 : tl.history.length - 1 - behindIdx;
+
+  const hasAhead = aheadIdx !== -1;
+  const hasBehind = behindIdx !== -1;
+  if (!hasAhead && !hasBehind) return tl;
+
+  const goForward = hasAhead && (!hasBehind || aheadIdx <= behindDist);
+  if (goForward) {
+    const moved = tl.upcoming.slice(0, aheadIdx);
+    const history = [
+      ...tl.history,
+      ...(tl.current != null ? [tl.current] : []),
+      ...moved,
+    ];
+    return { history, current: uri, upcoming: tl.upcoming.slice(aheadIdx + 1) };
+  }
+
+  const moved = tl.history.slice(behindIdx + 1);
+  const upcoming = [
+    ...moved,
+    ...(tl.current != null ? [tl.current] : []),
+    ...tl.upcoming,
+  ];
+  return { history: tl.history.slice(0, behindIdx), current: uri, upcoming };
+}
+
 // Append sampler picks to upcoming, skipping any that are already current or
 // already in upcoming. History is NOT used to dedupe — replays are fine
 // (cooldowns are enforced by the sampler, not here). This is the only entry

@@ -328,12 +328,13 @@ export function createPlaybackStore(): PlaybackStore {
         tl = await postTimelineAction({ action: 'forward' }); // materialize first pick
         if (gen !== samplerGeneration) return;
       }
-      if (!tl || !tl.current) { isSampling = false; timeline = null; return; }
+      if (!tl || !tl.current) { stopSampling(); return; }
       timeline = tl;
       const ok = await pushContext(gen);
       if (gen !== samplerGeneration) return;
-      if (!ok) { isSampling = false; timeline = null; return; }
+      if (!ok) { stopSampling(); return; }
       isSampling = true;
+      setSamplerActive(true);
     } finally {
       samplerBusy = false;
     }
@@ -451,13 +452,31 @@ export function createPlaybackStore(): PlaybackStore {
     isSampling = false;
     timeline = null;
     lastPushedUris = [];
+    // Every stop path (user plays something else, Spotify divergence, drain,
+    // failed push) clears the resume marker — sampler is no longer active, so a
+    // later reload must not auto-resume and hijack the user's playback.
+    setSamplerActive(false);
+  }
+
+  // Persisted marker for "the user's last play action was a sampler shuffle",
+  // so a page reload knows whether to auto-resume car mode (see tryResumeSampler).
+  // Set on a successful startSampler/resume, cleared by stopSampling. This
+  // replaced the old manual dev flag — it's now managed automatically.
+  function setSamplerActive(active: boolean): void {
+    if (!browser) return;
+    try {
+      if (active) localStorage.setItem('discovery.sampler', '1');
+      else localStorage.removeItem('discovery.sampler');
+    } catch { /* private mode — resume just won't fire, which is fine */ }
   }
 
   // Auto-resume car mode after a page reload. The store is reconstructed empty
   // on every navigation; if Spotify is still on a track our timeline owns, take
   // the session back over and RE-PUSH a fresh context (we can't know what
   // Spotify still has queued from before the reload, so re-establish it — one
-  // re-seek on reload is acceptable). Gated on the localStorage sampler flag.
+  // re-seek on reload is acceptable). Gated on the auto-managed sampler marker
+  // (set by startSampler, cleared by playTrack/shuffle) so we only resume when
+  // the user's last action was actually a shuffle.
   let resumeAttemptInflight: Promise<void> | null = null;
   async function tryResumeSampler(): Promise<void> {
     if (isSampling) return;
@@ -487,8 +506,13 @@ export function createPlaybackStore(): PlaybackStore {
           const synced = await postTimelineAction({ action: 'sync', uri: currentUri });
           if (gen !== samplerGeneration) return;
           timeline = synced ?? tl;
+          // Only consider ourselves resumed once the re-push actually landed.
+          // If it fails, stop cleanly (which also clears the resume marker) so
+          // we don't sit in a half-active state thinking we own Spotify.
+          const ok = await pushContext(gen, state.position_ms);
+          if (gen !== samplerGeneration) return;
+          if (!ok) { stopSampling(); return; }
           isSampling = true;
-          await pushContext(gen, state.position_ms);
         } finally {
           samplerBusy = false;
         }
@@ -500,13 +524,13 @@ export function createPlaybackStore(): PlaybackStore {
   }
 
   async function playTrack(uri: string, allUris: readonly string[]): Promise<void> {
-    stopSampling();
+    stopSampling(); // also clears the sampler resume marker
     const queue = buildQueueFromClick(uri, allUris);
     await callPlay({ uris: queue.slice(0, 100) });
   }
 
   async function shuffle(uris: readonly string[]): Promise<void> {
-    stopSampling();
+    stopSampling(); // also clears the sampler resume marker
     const ordered = shuffleFisherYates(uris);
     await callPlay({ uris: ordered.slice(0, 100) });
   }

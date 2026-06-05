@@ -1,41 +1,36 @@
 <script lang="ts">
   import { Shuffle, Sparkles } from '@lucide/svelte';
-  import { onMount } from 'svelte';
   import type { PlaybackStore } from '$lib/playback/player.svelte';
 
   let {
     store,
     getUris,
     label = 'Shuffle',
-  }: { store: PlaybackStore; getUris: () => Promise<readonly string[]>; label?: string } = $props();
+    sampler = false,
+  }: {
+    store: PlaybackStore;
+    // Required for plain (scoped) shuffle; unused when sampler=true.
+    getUris?: () => Promise<readonly string[]>;
+    label?: string;
+    // true → car-mode smart shuffle over the user's whole rated library.
+    // false → plain Fisher-Yates of the scoped URI set from getUris (a filtered
+    // library view or a single artist's tracks).
+    sampler?: boolean;
+  } = $props();
 
   let loading = $state(false);
-  // Dev/smoke-test toggle: localStorage.setItem('discovery.sampler', '1') in the
-  // browser console flips this button from the dumb fisher-yates path to the
-  // virtual-timeline driver (startSampler). Replaced by a real setting in slice 6.
-  let useSampler = $state(false);
-  onMount(() => {
-    try {
-      useSampler = localStorage.getItem('discovery.sampler') === '1';
-    } catch {
-      // localStorage can throw in private mode; default off
-    }
-  });
 
   async function onClick() {
     if (loading) return;
     loading = true;
     try {
-      if (useSampler) {
-        // Sampler mode plays one pick and then keeps Spotify's queue topped up,
-        // so playback advances automatically without further clicks. reset:true
-        // wipes any existing virtual queue first — a Shuffle press is always a
-        // fresh start, which doubles as the "my queue got messed up, clear it"
-        // escape hatch.
+      if (sampler) {
+        // Smart shuffle: hand Spotify a real context built from the sampler and
+        // keep following it. reset:true so each press is a fresh queue.
         await store.startSampler({ reset: true });
         return;
       }
-      const uris = await getUris();
+      const uris = (await getUris?.()) ?? [];
       if (uris.length > 0) await store.shuffle(uris);
     } finally {
       loading = false;
@@ -46,16 +41,16 @@
 <button
   type="button"
   class="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/10 px-3 py-1.5 text-xs backdrop-blur transition-colors hover:bg-white/20 disabled:opacity-50"
-  class:is-sampler={useSampler}
+  class:is-sampler={sampler}
   disabled={loading}
   onclick={onClick}
   data-testid="shuffle-button"
-  data-sampler={useSampler}
-  title={useSampler ? 'Sampler engine (dev)' : label}
+  data-sampler={sampler}
+  title={sampler ? 'Smart shuffle your library' : label}
 >
   {#if loading}
     <span>Loading…</span>
-  {:else if useSampler}
+  {:else if sampler}
     <Sparkles class="size-3.5" />
     <span>{label}</span>
   {:else}

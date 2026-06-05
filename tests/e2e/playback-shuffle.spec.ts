@@ -51,8 +51,11 @@ test('shuffle on /library uses current filter', async ({ page }) => {
   expect(lastBody.device_id).toBe('mock-device-1');
 });
 
-test('shuffle on /now-playing fetches full library and sends non-empty uris', async ({ page }) => {
-  // Spotify-elsewhere fixture so the page is in "remote control" mode.
+test('smart shuffle on /now-playing pushes a sampler-built context to Spotify', async ({ page }) => {
+  // Car mode: the now-playing "Shuffle my library" button starts the sampler,
+  // which builds a virtual timeline from the user's rated library and pushes
+  // [current, ...upcoming] to Spotify as a real context (PUT play with uris).
+  // It does NOT fetch /api/library (that was the old dumb-shuffle path).
   await page.route('**/api/spotify/currently-playing', (r) =>
     r.fulfill({
       status: 200,
@@ -60,12 +63,7 @@ test('shuffle on /now-playing fetches full library and sends non-empty uris', as
       body: JSON.stringify({ playing: null, rating: null }),
     }),
   );
-  let libraryFetched = false;
-  await page.route('**/api/library*', async (route) => {
-    libraryFetched = true;
-    await route.continue();
-  });
-  let lastBody: { uris?: string[]; device_id?: string } = {};
+  let lastBody: { uris?: string[] } = {};
   await page.route('**/api/spotify/player/play', async (route) => {
     lastBody = JSON.parse(route.request().postData() ?? '{}');
     await route.fulfill({ status: 204 });
@@ -75,6 +73,6 @@ test('shuffle on /now-playing fetches full library and sends non-empty uris', as
   await page.goto('/now-playing');
   await page.waitForLoadState('networkidle');
   await page.getByTestId('shuffle-button').click();
-  await expect.poll(() => libraryFetched, { timeout: 5000 }).toBe(true);
+  // The sampler builds from the seeded ratings and pushes a non-empty context.
   await expect.poll(() => lastBody.uris?.length ?? 0, { timeout: 5000 }).toBeGreaterThan(0);
 });

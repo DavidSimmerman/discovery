@@ -48,7 +48,9 @@ test('shuffle on /library uses current filter', async ({ page }) => {
   await page.waitForLoadState('networkidle');
   await page.getByTestId('shuffle-button').first().click();
   await expect.poll(() => lastBody.uris?.length ?? 0, { timeout: 5000 }).toBeGreaterThan(0);
-  expect(lastBody.device_id).toBe('mock-device-1');
+  // Car mode sends no device_id — Spotify routes to whichever device it
+  // considers active.
+  expect(lastBody.device_id).toBeUndefined();
 });
 
 test('smart shuffle on /now-playing pushes a sampler-built context to Spotify', async ({ page }) => {

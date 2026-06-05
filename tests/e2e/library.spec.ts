@@ -172,13 +172,16 @@ test('sort: rating sort orders songs high → low', async ({ page }) => {
   await page.getByTestId('library-sort-button').click();
   await expect(page.getByTestId('library-sort-rating')).toBeVisible();
   await page.getByTestId('library-sort-rating').click();
-  await page.waitForLoadState('networkidle');
-  const titles = await page.getByTestId('library-row').allInnerTexts();
+  // Assert with auto-retrying locators rather than a one-shot allInnerTexts()
+  // snapshot: the sort triggers a refetch, and reading the DOM immediately after
+  // networkidle races the re-sorted render (the default recency order happens to
+  // put Time first, so a too-early read looks like an ascending-sort bug).
   // Seed ratings: Midnight City 5, Strobe 4, Levitating 3, Time 2
-  expect(titles[0]).toContain('Midnight City');
-  expect(titles[1]).toContain('Strobe');
-  expect(titles[2]).toContain('Levitating');
-  expect(titles[3]).toContain('Time');
+  const rows = page.getByTestId('library-row');
+  await expect(rows.nth(0)).toContainText('Midnight City');
+  await expect(rows.nth(1)).toContainText('Strobe');
+  await expect(rows.nth(2)).toContainText('Levitating');
+  await expect(rows.nth(3)).toContainText('Time');
 });
 
 test('artists view: lists each seeded artist with their song count', async ({ page }) => {

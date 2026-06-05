@@ -15,62 +15,6 @@ import type { Timeline } from '$lib/server/shuffle/timeline';
 
 const KEY = Symbol('playback');
 
-// ── Debug instrumentation ──────────────────────────────────────────────
-// Native NEXT/PREV bugs live at the boundary between our virtual timeline and
-// Spotify's opaque user-queue. This ring buffer + console logger makes every
-// poll decision and every Spotify call visible so the behavior can be diagnosed
-// from real evidence instead of guesswork.
-//
-// Read it three ways in the browser console while sampling:
-//   • live: filter the console for "[shuffle]"
-//   • window.__shuffleLog            → raw entry array
-//   • dumpShuffleLog()               → copy-pasteable text dump
-//
-// Decision logging is always on while sampling (it's local, free). The heavier
-// Spotify-queue diagnostic fetch (logs Spotify's REAL queue next to ours) is
-// gated behind localStorage 'discovery.shuffleDebug' = '1' to protect the API
-// rate budget — flip it on when actively diagnosing.
-type DbgEntry = { t: string; tag: string; data?: Record<string, unknown> };
-const DBG_RING_CAP = 400;
-const dbgRing: DbgEntry[] = [];
-
-// Shorten a Spotify URI to its last 6 id chars for legible logs.
-function shortUri(uri: string | null | undefined): string | null {
-  if (!uri) return null;
-  const id = uri.split(':').pop() ?? uri;
-  return id.slice(-6);
-}
-
-function dbg(tag: string, data?: Record<string, unknown>): void {
-  if (!browser) return;
-  const d = new Date();
-  const t =
-    `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:` +
-    `${String(d.getSeconds()).padStart(2, '0')}.${String(d.getMilliseconds()).padStart(3, '0')}`;
-  dbgRing.push({ t, tag, data });
-  if (dbgRing.length > DBG_RING_CAP) dbgRing.shift();
-  // eslint-disable-next-line no-console
-  console.log(`[shuffle ${t}] ${tag}`, data ?? '');
-}
-
-function shuffleDebugEnabled(): boolean {
-  if (!browser) return false;
-  try {
-    return localStorage.getItem('discovery.shuffleDebug') === '1';
-  } catch {
-    return false;
-  }
-}
-
-if (browser) {
-  const w = window as unknown as Record<string, unknown>;
-  w.__shuffleLog = dbgRing;
-  w.dumpShuffleLog = () =>
-    dbgRing
-      .map((e) => `[${e.t}] ${e.tag}${e.data ? ' ' + JSON.stringify(e.data) : ''}`)
-      .join('\n');
-}
-
 // Car mode: disccovery hands Spotify a real multi-track context (PUT play with
 // [current, ...upcoming]) and lets Spotify's native NEXT/PREV walk it. We re-push
 // when Spotify nears the end of the list we handed it. No POST-queue poking, no
@@ -295,15 +239,12 @@ export function createPlaybackStore(): PlaybackStore {
   }
 
   async function callPlay(payload: Record<string, unknown>): Promise<boolean> {
-    const uris = Array.isArray(payload.uris) ? (payload.uris as string[]) : null;
-    dbg('callPlay', { uris: uris ? uris.map(shortUri) : payload, pos: payload.position_ms ?? 0 });
     const res = await fetch('/api/spotify/player/play', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(payload),
     });
     const ok = handleControlResponse(res);
-    dbg('callPlay:done', { ok });
     // Spotify needs ~200ms to reflect the change; chase it.
     setTimeout(() => void refresh(), 300);
     return ok;
@@ -344,39 +285,10 @@ export function createPlaybackStore(): PlaybackStore {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
       });
-      if (!res.ok) { dbg('tl-action:fail', { action: body.action, status: res.status }); return null; }
+      if (!res.ok) return null;
       const j = (await res.json()) as { timeline: Timeline };
-      const tl = j.timeline ?? null;
-      dbg('tl-action', {
-        action: body.action,
-        cur: shortUri(tl?.current),
-        up: tl?.upcoming.map(shortUri),
-        histLen: tl?.history.length,
-      });
-      return tl;
-    } catch { dbg('tl-action:throw', { action: body.action }); return null; }
-  }
-
-  // Diagnostic: fetch Spotify's REAL queue and log it next to our virtual
-  // timeline. Gated behind the shuffleDebug flag because it costs an API call.
-  // This is the single most useful signal for native-NEXT bugs — it shows when
-  // Spotify's user-queue has accumulated stale/out-of-order tracks we can't see.
-  async function logSpotifyQueue(): Promise<void> {
-    if (!shuffleDebugEnabled()) return;
-    try {
-      const res = await fetch('/api/spotify/queue');
-      if (!res.ok) return;
-      const j = (await res.json()) as {
-        currently_playing: { uri: string | null } | null;
-        queue: { uri: string | null }[];
-      };
-      dbg('spotify-queue', {
-        playing: shortUri(j.currently_playing?.uri),
-        queue: (j.queue ?? []).slice(0, 12).map((t) => shortUri(t.uri)),
-        ourUpcoming: timeline?.upcoming.slice(0, 12).map(shortUri),
-        lastPushed: lastPushedUris.slice(0, 12).map(shortUri),
-      });
-    } catch { /* diagnostic only */ }
+      return j.timeline ?? null;
+    } catch { return null; }
   }
 
   // Bumped on every start/stop/re-push so an in-flight async follow/re-push
@@ -393,7 +305,6 @@ export function createPlaybackStore(): PlaybackStore {
     const uris = [tl.current, ...tl.upcoming].slice(0, MAX_CONTEXT);
     const payload: Record<string, unknown> = { uris };
     if (positionMs != null) payload.position_ms = Math.max(0, Math.floor(positionMs));
-    dbg('pushContext', { n: uris.length, cur: shortUri(tl.current), pos: positionMs ?? 0 });
     const ok = await callPlay(payload);
     if (gen !== samplerGeneration || !ok) return false;
     lastPushedUris = uris;
@@ -406,7 +317,6 @@ export function createPlaybackStore(): PlaybackStore {
   async function startSampler(opts?: { reset?: boolean }): Promise<void> {
     if (samplerBusy) return;
     samplerBusy = true;
-    dbg('startSampler', { reset: opts?.reset === true });
     try {
       const gen = ++samplerGeneration;
       // reset → clean slate (Shuffle button); otherwise resume a persisted timeline.
@@ -445,8 +355,7 @@ export function createPlaybackStore(): PlaybackStore {
       // Guard against yanking playback backward: if a fast second native skip
       // moved Spotify off `uri` while we were syncing, skip the re-push and let
       // the next poll handle the new position.
-      if (state.track?.uri !== uri) { dbg('decision', { branch: 're-push:skip-stale' }); return; }
-      dbg('decision', { branch: 're-push', remaining });
+      if (state.track?.uri !== uri) return;
       await pushContext(gen, positionMs);
     }
   }
@@ -480,17 +389,6 @@ export function createPlaybackStore(): PlaybackStore {
     durationMs: number,
   ): void {
     if (!isSampling) { lastCurrentUri = currentUri; return; }
-
-    dbg('poll', {
-      cur: shortUri(currentUri),
-      pos: positionMs,
-      dur: durationMs,
-      vcur: shortUri(timeline?.current),
-      pushed: lastPushedUris.length,
-      busy: samplerBusy,
-    });
-    void logSpotifyQueue();
-
     if (samplerBusy) return;
 
     // 1. In sync.
@@ -501,7 +399,6 @@ export function createPlaybackStore(): PlaybackStore {
 
     // 2. Native advance/rewind within the context we pushed → follow it.
     if (currentUri != null && lastPushedUris.includes(currentUri)) {
-      dbg('decision', { branch: 'follow', cur: shortUri(currentUri) });
       samplerBusy = true;
       const gen = samplerGeneration;
       void followToUri(gen, currentUri, positionMs).finally(() => { samplerBusy = false; });
@@ -512,7 +409,6 @@ export function createPlaybackStore(): PlaybackStore {
     // Settle window: right after a push, Spotify may still report the pre-push
     // track (or a transient null) for a poll or two. Don't stop or reseed yet.
     if (Date.now() < contextSettleUntil) {
-      dbg('decision', { branch: 'settling', cur: shortUri(currentUri) });
       lastCurrentUri = currentUri;
       return;
     }
@@ -525,12 +421,10 @@ export function createPlaybackStore(): PlaybackStore {
       const wasOurs =
         lastCurrentUri === timeline?.current || lastPushedUris.includes(lastCurrentUri);
       if (!wasOurs) {
-        dbg('decision', { branch: 'diverged-drain-stop', last: shortUri(lastCurrentUri) });
         stopSampling();
         lastCurrentUri = currentUri;
         return;
       }
-      dbg('decision', { branch: 'reseed-drain' });
       samplerBusy = true;
       const gen = samplerGeneration;
       void reseedSampler(gen).finally(() => { samplerBusy = false; });
@@ -544,7 +438,6 @@ export function createPlaybackStore(): PlaybackStore {
     // sampling cleanly (sticky, so a later drain won't reseed over the user's
     // own Spotify session). They can re-shuffle to take back over.
     if (currentUri != null) {
-      dbg('decision', { branch: 'diverged-stop', cur: shortUri(currentUri) });
       stopSampling();
       lastCurrentUri = currentUri;
       return;

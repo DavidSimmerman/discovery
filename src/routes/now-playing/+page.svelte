@@ -7,7 +7,7 @@
   import Scrubber from '$lib/components/Scrubber.svelte';
   import ShuffleButton from '$lib/components/ShuffleButton.svelte';
   import PremiumGate from '$lib/components/PremiumGate.svelte';
-  import OtherVersions from '$lib/components/OtherVersions.svelte';
+  import TabbedPanel from '$lib/components/TabbedPanel.svelte';
   import { getPlaybackStore } from '$lib/playback/player.svelte';
 
   const playback = getPlaybackStore();
@@ -57,12 +57,6 @@
     }
   }
 
-  async function shuffleEverything(): Promise<readonly string[]> {
-    const res = await fetch('/api/library?limit=500');
-    if (!res.ok) return [];
-    const j = (await res.json()) as { rows: { uri: string }[] };
-    return j.rows.map((r) => r.uri);
-  }
 
   onMount(() => {
     playback.init();
@@ -130,16 +124,16 @@
     <LabelChips trackUri={playingForView.uri} />
 
     <div class="w-full max-w-md">
-      <OtherVersions trackUri={playingForView.uri} currentUri={playingForView.uri} />
+      <TabbedPanel
+        trackUri={playingForView.uri}
+        artistName={playingForView.artists[0] ?? ''}
+        {playback}
+      />
     </div>
   {/if}
 
   <PremiumGate {product}>
-    <ShuffleButton
-      store={playback}
-      getUris={shuffleEverything}
-      label="Shuffle my library"
-    />
+    <ShuffleButton store={playback} sampler label="Shuffle my library" />
   </PremiumGate>
 
   <div aria-live="polite" class="min-h-5 text-sm text-red-400">

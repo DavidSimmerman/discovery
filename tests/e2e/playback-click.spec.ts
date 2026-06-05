@@ -10,7 +10,8 @@ import {
   testUserId,
   testSpotifyId,
 } from './fixtures/seed';
-import { mockSpotifySdk, emitSdkState } from './mocks/spotify-sdk';
+import { mockSpotifySdk } from './mocks/spotify-sdk';
+import { mockCurrentlyPlaying, type CurrentlyPlayingFixture } from './mocks/spotify';
 
 test.beforeEach(async ({ context, page }) => {
   const w = test.info().workerIndex;
@@ -44,6 +45,11 @@ test('clicking a library row opens the track view; Play now plays that track', a
     await route.fulfill({ status: 204 });
   });
   await page.route('**/api/spotify/player/transfer', (r) => r.fulfill({ status: 204 }));
+  // Car mode has no Web Playback SDK — the mini-player reflects whatever
+  // /api/spotify/currently-playing reports. Start empty; flip to the played
+  // track after Play so the next poll surfaces the mini-player.
+  let cp: CurrentlyPlayingFixture = { playing: null, rating: null };
+  await mockCurrentlyPlaying(page, () => cp);
 
   await page.goto('/library');
   const row = page.getByTestId('library-row').first();
@@ -55,18 +61,26 @@ test('clicking a library row opens the track view; Play now plays that track', a
   await page.getByTestId('track-play-now').click();
 
   await expect.poll(() => lastBody, { timeout: 3000 }).not.toBeNull();
-  const body = lastBody as { uris: string[]; device_id: string };
+  const body = lastBody as { uris: string[]; device_id?: string };
   expect(body.uris[0]).toBe(uri);
-  expect(body.device_id).toBe('mock-device-1');
+  // Car mode sends no device_id — Spotify routes to its own active device.
+  expect(body.device_id).toBeUndefined();
 
-  // Synthesize an SDK state-change so the mini-player shows on /library.
-  await emitSdkState(page, {
-    track: {
+  // Playback started: currently-playing now reports the track, so the next
+  // poll surfaces the persistent mini-player.
+  cp = {
+    playing: {
       uri: uri!,
       name: 'Mock Track',
-      artists: [{ name: 'X' }],
-      album: { name: '', images: [] },
+      artists: ['X'],
+      album: null,
+      albumArtUrl: null,
+      durationMs: 200_000,
+      progressMs: 0,
+      isPlaying: true,
+      isrc: null,
     },
-  });
+    rating: null,
+  };
   await expect(page.getByLabel(/open now playing/i)).toBeVisible();
 });

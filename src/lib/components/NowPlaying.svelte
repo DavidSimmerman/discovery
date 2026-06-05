@@ -1,5 +1,7 @@
 <script lang="ts">
   import StarRating from '$lib/components/StarRating.svelte';
+  import { ExternalLink } from '@lucide/svelte';
+  import { spotifyTrackUrl } from '$lib/spotifyLink';
 
   type Playing = {
     uri: string;
@@ -21,6 +23,8 @@
   };
 
   let { playing, rating, loading, onrate }: Props = $props();
+
+  const spotifyUrl = $derived(spotifyTrackUrl(playing?.uri));
 </script>
 
 {#if loading && !playing}
@@ -53,6 +57,17 @@
     <div class="flex w-full max-w-xs flex-col items-center gap-1">
       <h2 class="text-2xl font-extrabold leading-tight text-balance break-words">{playing.name}</h2>
       <p class="text-sm text-white/70 text-balance break-words">{playing.artists.join(', ')}</p>
+      {#if spotifyUrl}
+        <a
+          href={spotifyUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          class="mt-1 inline-flex items-center gap-1.5 rounded-full bg-white/[0.06] px-3 py-1 text-xs font-medium text-white/70 transition-colors hover:bg-white/10 hover:text-spotify-green"
+        >
+          <ExternalLink class="size-3.5" />
+          Open in Spotify
+        </a>
+      {/if}
     </div>
 
     <StarRating interactive value={rating ?? 0} size={42} onchange={onrate} />

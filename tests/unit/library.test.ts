@@ -113,7 +113,7 @@ describe('GET /api/library', () => {
     });
   });
 
-  it.each(['recency', 'rating', 'name', 'artist'])('?sort=%s → opts.sort %s', async (s) => {
+  it.each(['recency', 'rating', 'name', 'artist', 'top'])('?sort=%s → opts.sort %s', async (s) => {
     await GET(getEvent({ user: USER, query: { sort: s } }));
     expect(h.listLibrary).toHaveBeenCalledWith(USER_ID, expect.objectContaining({ sort: s }));
   });

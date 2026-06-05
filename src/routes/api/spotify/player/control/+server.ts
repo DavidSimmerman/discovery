@@ -3,8 +3,8 @@ import type { RequestHandler } from './$types';
 import { getValidAccessToken } from '$lib/server/tokens';
 import { mapSpotifyPlayError } from '$lib/playback/errors';
 
-type Action = 'pause' | 'resume' | 'next' | 'previous' | 'seek';
-interface Body { action: Action; position_ms?: number }
+type Action = 'pause' | 'resume' | 'next' | 'previous' | 'seek' | 'queue';
+interface Body { action: Action; position_ms?: number; uri?: string }
 
 const ENDPOINT: Record<Action, { method: 'PUT' | 'POST'; path: string }> = {
   pause:    { method: 'PUT',  path: 'pause' },
@@ -12,6 +12,7 @@ const ENDPOINT: Record<Action, { method: 'PUT' | 'POST'; path: string }> = {
   next:     { method: 'POST', path: 'next' },
   previous: { method: 'POST', path: 'previous' },
   seek:     { method: 'PUT',  path: 'seek' },
+  queue:    { method: 'POST', path: 'queue' },
 };
 
 export const POST: RequestHandler = async ({ locals, request }) => {
@@ -25,6 +26,10 @@ export const POST: RequestHandler = async ({ locals, request }) => {
   if (body.action === 'seek') {
     if (typeof body.position_ms !== 'number') throw error(400, 'position_ms required');
     url += `?position_ms=${Math.max(0, Math.floor(body.position_ms))}`;
+  }
+  if (body.action === 'queue') {
+    if (typeof body.uri !== 'string') throw error(400, 'uri required');
+    url += `?uri=${encodeURIComponent(body.uri)}`;
   }
 
   const { access_token } = await getValidAccessToken(locals.user.id);

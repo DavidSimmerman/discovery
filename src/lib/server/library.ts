@@ -4,7 +4,7 @@ import { artistScore, type ScoredTrack } from '$lib/server/artist-score';
 import { getTopArtistRank, getTopTrackRank } from '$lib/server/top-lists';
 import { groupSongs, type Groupable } from '$lib/song-group';
 
-export type LibrarySort = 'recency' | 'rating' | 'name' | 'artist';
+export type LibrarySort = 'recency' | 'rating' | 'name' | 'artist' | 'top';
 
 // DB approach: src/lib/server/db/index.ts exports only the Drizzle `db` (the raw
 // postgres-js client is module-private), so these UNION/aggregate queries are
@@ -26,6 +26,7 @@ export type LibraryRow = {
   primaryArtistId: string | null;
   versionType: string | null;
   album: string | null;
+  plays: number;
 };
 
 export async function listLibrary(
@@ -97,6 +98,7 @@ export async function listLibrary(
     primary_artist_id: string | null;
     version_type: string | null;
     album: string | null;
+    plays_count: number;
   }>(sql`
     WITH base AS (
       SELECT spotify_track_uri AS uri FROM ratings WHERE user_id = ${userId}
@@ -118,6 +120,10 @@ export async function listLibrary(
       t.primary_artist_id AS primary_artist_id,
       t.version_type AS version_type,
       t.album AS album,
+      COALESCE((
+        SELECT count(*)::int FROM plays p
+        WHERE p.user_id = ${userId} AND p.spotify_track_uri = base.uri
+      ), 0) AS plays_count,
       GREATEST(
         COALESCE(r.rated_at, 'epoch'::timestamptz),
         COALESCE(max(tl.applied_at), 'epoch'::timestamptz)
@@ -149,6 +155,7 @@ export async function listLibrary(
     primaryArtistId: row.primary_artist_id,
     versionType: row.version_type,
     album: row.album,
+    plays: row.plays_count ?? 0,
   }));
 }
 
@@ -168,6 +175,7 @@ export async function getLibraryTrack(
     primary_artist_id: string | null;
     version_type: string | null;
     album: string | null;
+    plays_count: number;
   }>(sql`
     SELECT
       ${uri}::text AS uri,
@@ -183,7 +191,11 @@ export async function getLibraryTrack(
       t.canonical_title AS canonical_title,
       t.primary_artist_id AS primary_artist_id,
       t.version_type AS version_type,
-      t.album AS album
+      t.album AS album,
+      COALESCE((
+        SELECT count(*)::int FROM plays p
+        WHERE p.user_id = ${userId} AND p.spotify_track_uri = ${uri}
+      ), 0) AS plays_count
     FROM (SELECT ${uri}::text AS uri) base
     LEFT JOIN tracks t ON t.spotify_track_uri = base.uri
     LEFT JOIN ratings r ON r.spotify_track_uri = base.uri AND r.user_id = ${userId}
@@ -212,6 +224,7 @@ export async function getLibraryTrack(
     primaryArtistId: row.primary_artist_id,
     versionType: row.version_type,
     album: row.album,
+    plays: row.plays_count ?? 0,
   };
 }
 
@@ -225,6 +238,12 @@ function orderBy(sort: LibrarySort) {
       return sql`ORDER BY lower(t.title) ASC NULLS LAST, recency DESC`;
     case 'artist':
       return sql`ORDER BY lower(t.artists[1]) ASC NULLS LAST, r.rating_stars DESC NULLS LAST, lower(t.title) ASC NULLS LAST`;
+    case 'top':
+      // "Top tracks" — rating first, then how often the user has actually played
+      // it. Used by the Artist tab on now-playing to surface the user's most-loved,
+      // most-spun songs by the current artist. Refers to plays_count by alias from
+      // the outer SELECT (Postgres allows output-column references in ORDER BY).
+      return sql`ORDER BY r.rating_stars DESC NULLS LAST, plays_count DESC, recency DESC`;
     case 'recency':
     default:
       return sql`ORDER BY recency DESC`;

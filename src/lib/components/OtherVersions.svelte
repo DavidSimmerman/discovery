@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import { Play, Star, Loader2, Search } from '@lucide/svelte';
+  import OpenInSpotifyLink from '$lib/components/OpenInSpotifyLink.svelte';
   import { getPlaybackStore } from '$lib/playback/player.svelte';
 
   type Entry = {
@@ -167,34 +168,37 @@
           {@const playingHere = playback.state.track?.uri === v.uri}
           {@const label = versionLabel(v)}
           {@const isCurrent = currentUri === v.uri}
-          <button
-            type="button"
-            data-testid="other-version-row"
-            data-uri={v.uri}
-            onclick={() => openTrack(v)}
-            disabled={isCurrent}
-            class="flex items-center gap-3 rounded-xl bg-white/[0.04] p-2 text-left transition-colors hover:bg-white/[0.08] disabled:opacity-40"
-          >
-            {#if v.albumArtUrl}
-              <img src={v.albumArtUrl} alt="" class="size-10 flex-shrink-0 rounded-md object-cover shadow shadow-black/40" />
-            {:else}
-              <div class="size-10 flex-shrink-0 rounded-md bg-white/10" aria-hidden="true"></div>
-            {/if}
-            <div class="min-w-0 flex-1">
-              <div class="truncate text-sm font-medium {playingHere ? 'text-spotify-green' : 'text-white'}">
-                {v.title}
-              </div>
-              {#if label}
-                <div class="truncate text-[10px] text-white/45">{label}</div>
+          <div class="flex items-center gap-1">
+            <button
+              type="button"
+              data-testid="other-version-row"
+              data-uri={v.uri}
+              onclick={() => openTrack(v)}
+              disabled={isCurrent}
+              class="flex min-w-0 flex-1 items-center gap-3 rounded-xl bg-white/[0.04] p-2 text-left transition-colors hover:bg-white/[0.08] disabled:opacity-40"
+            >
+              {#if v.albumArtUrl}
+                <img src={v.albumArtUrl} alt="" class="size-10 flex-shrink-0 rounded-md object-cover shadow shadow-black/40" />
+              {:else}
+                <div class="size-10 flex-shrink-0 rounded-md bg-white/10" aria-hidden="true"></div>
               {/if}
-            </div>
-            {#if v.rating != null && v.rating > 0}
-              <span class="flex flex-shrink-0 items-center gap-0.5 text-spotify-green">
-                <Star class="size-3.5 fill-current" />
-                <span class="text-sm font-bold tabular-nums">{v.rating}</span>
-              </span>
-            {/if}
-          </button>
+              <div class="min-w-0 flex-1">
+                <div class="truncate text-sm font-medium {playingHere ? 'text-spotify-green' : 'text-white'}">
+                  {v.title}
+                </div>
+                {#if label}
+                  <div class="truncate text-[10px] text-white/45">{label}</div>
+                {/if}
+              </div>
+              {#if v.rating != null && v.rating > 0}
+                <span class="flex flex-shrink-0 items-center gap-0.5 text-spotify-green">
+                  <Star class="size-3.5 fill-current" />
+                  <span class="text-sm font-bold tabular-nums">{v.rating}</span>
+                </span>
+              {/if}
+            </button>
+            <OpenInSpotifyLink uri={v.uri} />
+          </div>
         {/each}
       </div>
     {/if}
@@ -234,6 +238,7 @@
               <Play class="size-3 fill-current" />
               Play
             </button>
+            <OpenInSpotifyLink uri={v.uri} />
           </div>
         {/each}
       </div>
@@ -290,6 +295,7 @@
               <Play class="size-3 fill-current" />
               Play
             </button>
+            <OpenInSpotifyLink uri={v.uri} />
           </div>
         {/each}
       </div>

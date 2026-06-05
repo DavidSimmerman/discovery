@@ -11,6 +11,7 @@ import {
   testSpotifyId,
 } from './fixtures/seed';
 import { mockSpotifySdk } from './mocks/spotify-sdk';
+import { mockCurrentlyPlaying } from './mocks/spotify';
 
 test.beforeEach(async ({ context, page }) => {
   const w = test.info().workerIndex;
@@ -36,7 +37,7 @@ test.afterAll(async () => {
   await closeSeedConnection();
 });
 
-test('premium_required at play time swaps in PremiumGate state', async ({ page }) => {
+test('premium_required at play time surfaces the premium error', async ({ page }) => {
   await page.route('**/api/spotify/player/transfer', (r) => r.fulfill({ status: 204 }));
   await page.route('**/api/spotify/player/play', (r) =>
     r.fulfill({
@@ -45,9 +46,16 @@ test('premium_required at play time swaps in PremiumGate state', async ({ page }
       body: JSON.stringify({ error: 'premium_required' }),
     }),
   );
+  // Keep currently-playing deterministic so a real Spotify poll doesn't clobber
+  // the premium error with an auth/transient one.
+  await mockCurrentlyPlaying(page, () => ({ playing: null, rating: null }));
 
   await page.goto('/now-playing');
   await page.waitForLoadState('networkidle');
   await page.getByTestId('shuffle-button').click();
-  await expect(page.getByText(/Premium required to play in disccovery/i).first()).toBeVisible();
+  // Car mode shows an inline error (no PremiumGate swap) when Spotify rejects
+  // the play with 402.
+  await expect(
+    page.getByText(/Premium required to control Spotify playback/i),
+  ).toBeVisible();
 });

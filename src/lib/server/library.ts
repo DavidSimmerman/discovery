@@ -205,6 +205,10 @@ export async function getLibraryTrack(
       SELECT 1 FROM ratings WHERE user_id = ${userId} AND spotify_track_uri = ${uri}
       UNION
       SELECT 1 FROM track_labels WHERE user_id = ${userId} AND spotify_track_uri = ${uri}
+      UNION
+      -- Also resolve cataloged-but-unrated tracks (e.g. an artist's "Top unrated"
+      -- picks) so the track page can open them for rating without playback.
+      SELECT 1 FROM tracks WHERE spotify_track_uri = ${uri}
     )
     GROUP BY t.title, t.artists, t.album_art_url, r.rating_stars,
              t.song_family_id, t.canonical_title, t.primary_artist_id, t.version_type, t.album

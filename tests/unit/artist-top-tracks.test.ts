@@ -11,6 +11,7 @@ vi.mock('$lib/server/db/schema', () => ({
 vi.mock('$lib/server/shuffle/providers/lastfm', () => ({ fetchArtistTopTracks: vi.fn() }));
 vi.mock('$lib/server/spotify', () => ({ searchTracks: vi.fn() }));
 vi.mock('$lib/server/library', () => ({ listArtists: vi.fn() }));
+vi.mock('$lib/server/tracks', () => ({ largestAlbumArtUrl: () => null }));
 
 import {
   normalizeArtistKey,

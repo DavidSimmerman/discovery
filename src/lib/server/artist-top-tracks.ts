@@ -14,6 +14,7 @@ import { and, eq, inArray, or, sql } from 'drizzle-orm';
 import { fetchArtistTopTracks, type ArtistTopTrack } from '$lib/server/shuffle/providers/lastfm';
 import { searchTracks, type SpotifyTrack } from '$lib/server/spotify';
 import { listArtists } from '$lib/server/library';
+import { largestAlbumArtUrl } from '$lib/server/tracks';
 
 // How long a cached artist catalog stays fresh before we re-pull from Last.fm.
 export const ARTIST_CATALOG_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -131,7 +132,7 @@ function resolveFromSpotify(t: SpotifyTrack | undefined, artistKey: string): Res
     uri: t.uri,
     isrc: t.external_ids?.isrc ?? null,
     album: t.album?.name ?? null,
-    albumArtUrl: t.album?.images?.[0]?.url ?? null,
+    albumArtUrl: largestAlbumArtUrl(t),
   };
 }
 
@@ -175,7 +176,9 @@ async function refreshArtistCatalog(
     }
   }
 
-  // Resolve misses via Spotify search (bounded concurrency).
+  // Resolve misses via Spotify search (bounded concurrency). Search-resolved
+  // tracks aren't in our `tracks` table, so collect the full objects to cache.
+  const searchHits: SpotifyTrack[] = [];
   const resolved = await mapLimit(top, SEARCH_CONCURRENCY, async (t): Promise<Resolved> => {
     const hit = byTitle.get(normalizeTitle(t.title));
     if (hit) return hit;
@@ -184,8 +187,33 @@ async function refreshArtistCatalog(
       `track:"${t.title.replace(/"/g, '')}" artist:"${artistName.replace(/"/g, '')}"`,
       1,
     );
-    return resolveFromSpotify(results[0], artistKey);
+    const sp = results[0];
+    const r = resolveFromSpotify(sp, artistKey);
+    if (r.uri && sp) searchHits.push(sp);
+    return r;
   });
+
+  // Cache search-resolved track metadata into `tracks` (basic upsert, same as
+  // the enrichment worker) so the track page and other lookups can resolve these
+  // URIs — otherwise a "Top unrated" pick would 404 when opened. DB-first hits
+  // are already in `tracks`.
+  if (searchHits.length > 0) {
+    const byUri = new Map(searchHits.map((sp) => [sp.uri, sp]));
+    await db
+      .insert(tracks)
+      .values(
+        [...byUri.values()].map((sp) => ({
+          spotifyTrackUri: sp.uri,
+          isrc: sp.external_ids?.isrc ?? null,
+          title: sp.name,
+          artists: sp.artists.map((a) => a.name),
+          album: sp.album?.name ?? null,
+          albumArtUrl: largestAlbumArtUrl(sp),
+          durationMs: sp.duration_ms,
+        })),
+      )
+      .onConflictDoNothing();
+  }
 
   const values = top.map((t, i) => ({
     artistKey,

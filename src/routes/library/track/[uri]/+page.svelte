@@ -3,6 +3,7 @@
   import { page } from '$app/state';
   import { ChevronLeft, Play } from '@lucide/svelte';
   import StarRating from '$lib/components/StarRating.svelte';
+  import ArtistLink from '$lib/components/ArtistLink.svelte';
   import LabelChips from '$lib/components/LabelChips.svelte';
   import PremiumGate from '$lib/components/PremiumGate.svelte';
   import OtherVersions from '$lib/components/OtherVersions.svelte';
@@ -94,7 +95,7 @@
     <div class="min-w-0">
       <h1 class="truncate text-2xl font-extrabold">{data.track.title ?? 'Unknown track'}</h1>
       {#if data.track.artists.length > 0}
-        <p class="truncate text-sm text-white/60">{data.track.artists.join(', ')}</p>
+        <ArtistLink artists={data.track.artists} class="truncate text-sm text-white/60" />
       {/if}
     </div>
 

@@ -176,6 +176,38 @@ export async function seedLibrary(userId: string, workerIndex: number): Promise<
   }
 }
 
+// A standalone multi-artist track for the artist-link drawer spec. Namespaced by
+// worker like the fixture tracks, but kept OUT of LIBRARY_FIXTURE so it doesn't
+// perturb the artist-count assertions in library.spec.
+function multiArtistUri(workerIndex: number): string {
+  const id = `MultiArtist${String(workerIndex).padStart(4, '0')}`.padEnd(22, '0').slice(0, 22);
+  return `spotify:track:${id}`;
+}
+
+export const MULTI_ARTIST_NAMES = ['Calvin Harris', 'Rihanna'];
+
+/** Seeds one multi-artist track (rated, so it surfaces on the track-detail page). */
+export async function seedMultiArtistTrack(userId: string, workerIndex: number): Promise<string> {
+  const sql = getDb();
+  const uri = multiArtistUri(workerIndex);
+  await sql`
+    INSERT INTO tracks (spotify_track_uri, title, artists, album_art_url)
+    VALUES (${uri}, ${'This Is What You Came For'}, ${MULTI_ARTIST_NAMES}, ${null})
+    ON CONFLICT (spotify_track_uri) DO UPDATE
+      SET title = EXCLUDED.title, artists = EXCLUDED.artists
+  `;
+  await sql`
+    INSERT INTO ratings (user_id, spotify_track_uri, rating_stars)
+    VALUES (${userId}, ${uri}, ${4})
+  `;
+  return uri;
+}
+
+export async function cleanupMultiArtistTrack(workerIndex: number): Promise<void> {
+  const sql = getDb();
+  await sql`DELETE FROM tracks WHERE spotify_track_uri = ${multiArtistUri(workerIndex)}`;
+}
+
 /** Deletes the worker's seeded tracks rows (tracks does NOT cascade on user delete). */
 export async function cleanupLibrary(workerIndex: number): Promise<void> {
   const sql = getDb();

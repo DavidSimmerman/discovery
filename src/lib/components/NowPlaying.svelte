@@ -1,5 +1,6 @@
 <script lang="ts">
   import StarRating from '$lib/components/StarRating.svelte';
+  import ArtistLink from '$lib/components/ArtistLink.svelte';
   import { ExternalLink } from '@lucide/svelte';
   import { spotifyTrackUrl } from '$lib/spotifyLink';
 
@@ -56,7 +57,7 @@
 
     <div class="flex w-full max-w-xs flex-col items-center gap-1">
       <h2 class="text-2xl font-extrabold leading-tight text-balance break-words">{playing.name}</h2>
-      <p class="text-sm text-white/70 text-balance break-words">{playing.artists.join(', ')}</p>
+      <ArtistLink artists={playing.artists} class="text-sm text-white/70 text-balance break-words" />
       {#if spotifyUrl}
         <a
           href={spotifyUrl}

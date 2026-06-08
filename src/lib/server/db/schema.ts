@@ -343,5 +343,28 @@ export const userTopTracks = pgTable(
   (table) => [primaryKey({ columns: [table.userId, table.rank] })],
 );
 
+// Last.fm artist top-tracks, ranked by global playcount and resolved to Spotify
+// URIs. Catalog-level cache (NOT user-scoped) — rated-filtering happens at read
+// time by joining the reader's `ratings`. Keyed by a normalized artist name
+// (lowercase/trimmed) because the now-playing surface only knows the artist's
+// display name, not always its Spotify id. `spotifyTrackUri` is null when no
+// Spotify match was found for that Last.fm title. Refreshed per-artist when
+// stale (see ARTIST_CATALOG_TTL_MS in artist-top-tracks.ts).
+export const artistTopTracks = pgTable(
+  'artist_top_tracks',
+  {
+    artistKey: text('artist_key').notNull(),
+    rank: smallint('rank').notNull(), // 1-indexed Last.fm playcount rank
+    lastfmTitle: text('lastfm_title').notNull(),
+    spotifyTrackUri: text('spotify_track_uri'),
+    isrc: text('isrc'),
+    album: text('album'),
+    albumArtUrl: text('album_art_url'),
+    playcount: integer('playcount').notNull().default(0),
+    fetchedAt: timestamp('fetched_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.artistKey, table.rank] })],
+);
+
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;

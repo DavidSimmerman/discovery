@@ -4,17 +4,19 @@
   //              real context, so its queue is the source of truth — edits happen
   //              in Spotify itself). Visible only while sampling.
   //   versions — library + catalog versions of the current track
-  //   artist   — primary artist's top tracks in the user's library (rating + plays)
+  //   artist   — artist stats (avg/rating/rank) + top unrated tracks (Last.fm
+  //              playcount, lazy) + the artist's rated tracks in the library
   //   covers   — MusicBrainz-backed covers; kept lazy (external hop)
   //
   // Tab click triggers the fetch for that tab. Counts for versions + artist
   // preload on track change so the tab pills show numbers without the user
   // opening them. Covers stays uncounted by design.
 
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { goto } from '$app/navigation';
   import { Play, Star, Loader2 } from '@lucide/svelte';
   import OpenInSpotifyLink from '$lib/components/OpenInSpotifyLink.svelte';
+  import { formatPlays } from '$lib/format';
   import type { PlaybackStore } from '$lib/playback/player.svelte';
 
   type Entry = {
@@ -47,20 +49,45 @@
 
   type SpotifyQueueItem = { uri: string; name: string | null; artists: string[] };
 
+  type TopUnratedTrack = {
+    uri: string;
+    title: string;
+    album: string | null;
+    albumArtUrl: string | null;
+    playcount: number;
+    rank: number;
+  };
+  type ArtistStats = { avg: number; rating: number; rank: number; total: number; count: number };
+  type DiscoveryData = { stats: ArtistStats | null; topUnrated: TopUnratedTrack[] };
+
   type Tab = 'queue' | 'versions' | 'artist' | 'covers';
 
   let {
     trackUri,
     artistName,
     playback,
-  }: { trackUri: string; artistName: string; playback: PlaybackStore } = $props();
+    showQueue = true,
+  }: { trackUri: string; artistName: string; playback: PlaybackStore; showQueue?: boolean } =
+    $props();
 
-  let activeTab = $state<Tab>('queue');
+  // The Queue tab is now-playing-only (it mirrors Spotify's live sampler queue).
+  // Surfaces that don't sample (e.g. the song details page) pass showQueue=false.
+  // showQueue is effectively constant per surface, so capture it once for the
+  // initial tab (untrack avoids the "only captures initial value" warning).
+  let activeTab = $state<Tab>(untrack(() => (showQueue ? 'queue' : 'versions')));
   let loadedFor = $state<string | null>(null);
 
   // Versions / Artist data (preloaded on track change). null = not loaded yet.
   let versionsData = $state<{ library: Entry[]; catalog: Entry[] } | null>(null);
   let artistData = $state<LibraryRow[] | null>(null);
+
+  // Artist-tab discovery (stats + top unrated). Lazy — loaded when the Artist
+  // tab is opened, keyed by artist (not track) so same-artist track changes keep
+  // it. The lookup can hit Last.fm + Spotify, so it's never preloaded.
+  let discoveryData = $state<DiscoveryData | null>(null);
+  let discoveryState = $state<'idle' | 'loading' | 'done' | 'error'>('idle');
+  let discoveryFor = $state<string | null>(null);
+  let discoveryAc: AbortController | null = null;
 
   // Covers data (lazy, click-triggered).
   type CoverState = 'idle' | 'loading' | 'done' | 'unavailable' | 'error';
@@ -91,7 +118,7 @@
 
   // Reload preloads + reset lazy state when the source track changes. Guard on
   // loadedFor so we don't re-fire when trackUri reactive churn fires the effect
-  // with the same URI (same pattern OtherVersions used).
+  // with the same URI.
   $effect(() => {
     const uri = trackUri;
     if (!uri || uri === loadedFor) return;
@@ -99,8 +126,12 @@
     resetForUri();
     void loadVersions(uri);
     void loadArtist(artistName);
+    // Preload discovery (stats + top unrated) as soon as the track plays so the
+    // Artist tab is ready when opened — no late pop-in. Keyed by artist, so
+    // consecutive tracks by the same artist reuse the in-flight/loaded result.
+    if (discoveryFor !== artistName) void loadDiscovery(artistName);
     // Refresh Spotify's queue too — it shifts as playback advances.
-    if (isSampling) void loadSpotifyQueue();
+    if (isSampling && showQueue) void loadSpotifyQueue();
   });
 
   // Default tab follows sampler state: sampling → queue, otherwise → versions.
@@ -108,7 +139,7 @@
   let userPickedTab = $state(false);
   $effect(() => {
     if (userPickedTab) return;
-    activeTab = isSampling ? 'queue' : 'versions';
+    activeTab = isSampling && showQueue ? 'queue' : 'versions';
   });
 
   function resetForUri(): void {
@@ -164,6 +195,36 @@
     } catch (e) {
       if ((e as { name?: string })?.name === 'AbortError') return;
       if (artistAc === ac && trackUri === uriAtStart) artistData = [];
+    }
+  }
+
+  async function loadDiscovery(name: string): Promise<void> {
+    discoveryAc?.abort();
+    const trimmed = (name ?? '').trim();
+    discoveryFor = trimmed;
+    if (trimmed === '') {
+      discoveryData = { stats: null, topUnrated: [] };
+      discoveryState = 'done';
+      return;
+    }
+    const ac = new AbortController();
+    discoveryAc = ac;
+    discoveryState = 'loading';
+    discoveryData = null; // drop the previous artist's data so it can't flash
+    try {
+      const res = await fetch(
+        `/api/library/artist/${encodeURIComponent(trimmed)}/discovery`,
+        { signal: ac.signal },
+      );
+      if (discoveryAc !== ac) return;
+      if (!res.ok) { discoveryState = 'error'; return; }
+      const data = (await res.json()) as DiscoveryData;
+      if (discoveryAc !== ac) return;
+      discoveryData = { stats: data.stats ?? null, topUnrated: data.topUnrated ?? [] };
+      discoveryState = 'done';
+    } catch (e) {
+      if ((e as { name?: string })?.name === 'AbortError') return;
+      if (discoveryAc === ac) discoveryState = 'error';
     }
   }
 
@@ -238,7 +299,10 @@
     if (tab === 'queue') void loadSpotifyQueue();
     if (tab === 'covers' && coverState === 'idle') void loadCovers();
     if (tab === 'versions' && versionsData == null) void loadVersions(trackUri);
-    if (tab === 'artist' && artistData == null) void loadArtist(artistName);
+    if (tab === 'artist') {
+      if (artistData == null) void loadArtist(artistName);
+      if (discoveryFor !== artistName) void loadDiscovery(artistName);
+    }
   }
 
   function playEntry(uri: string): void {
@@ -253,6 +317,7 @@
   onMount(() => () => {
     versionsAc?.abort();
     artistAc?.abort();
+    discoveryAc?.abort();
     queueAc?.abort();
     queueMetaAc?.abort();
   });
@@ -261,7 +326,7 @@
 <section class="flex w-full flex-col gap-3" data-testid="tabbed-panel">
   <!-- tab bar -->
   <div class="flex gap-1 rounded-full bg-white/[0.05] p-1 ring-1 ring-white/10">
-    {#if isSampling}
+    {#if isSampling && showQueue}
       <button
         type="button"
         data-testid="tab-queue"
@@ -419,47 +484,112 @@
 
   <!-- ─── ARTIST ────────────────────────────────────────────────── -->
   {#if activeTab === 'artist'}
-    {#if artistData == null}
+    {@const stats = discoveryData?.stats ?? null}
+    {@const topUnrated = discoveryData?.topUnrated ?? []}
+    {@const rated = artistData ?? []}
+    {@const tabLoading =
+      artistData == null || discoveryState === 'idle' || discoveryState === 'loading'}
+    {@const empty =
+      !stats && topUnrated.length === 0 && rated.length === 0 && discoveryState !== 'error'}
+
+    {#if tabLoading}
+      <!-- One unified spinner for the whole tab: don't reveal the library songs
+           and then re-flow when discovery (stats + top unrated) lands. -->
       <div class="flex items-center gap-2 text-xs text-white/45">
         <Loader2 class="size-3.5 animate-spin" />
-        Loading {artistName}'s top tracks…
+        Loading {artistName || 'artist'}…
       </div>
-    {:else if artistData.length === 0}
-      <p class="text-xs text-white/45">Nothing from {artistName || 'this artist'} in your library yet.</p>
     {:else}
-      <p class="px-1 text-[10px] font-semibold uppercase tracking-wider text-white/40">{artistName} · top in your library</p>
-      <div class="flex flex-col gap-1" data-testid="artist-list">
-        {#each artistData as row (row.uri)}
-          {@const playingHere = playback.state.track?.uri === row.uri}
-          <div class="flex items-center gap-1">
-            <button
-              type="button"
-              onclick={() => { if (!playingHere) playEntry(row.uri); }}
-              disabled={playingHere}
-              class="flex min-w-0 flex-1 items-center gap-3 rounded-xl bg-white/[0.03] p-2 text-left transition-colors hover:bg-white/[0.06] disabled:cursor-default disabled:bg-white/[0.06]"
-            >
-              {#if row.albumArtUrl}
-                <img src={row.albumArtUrl} alt="" class="size-10 shrink-0 rounded-md object-cover shadow shadow-black/40" />
-              {:else}
-                <div class="size-10 shrink-0 rounded-md bg-white/10"></div>
-              {/if}
-              <div class="min-w-0 flex-1">
-                <div class="truncate text-sm font-medium {playingHere ? 'text-spotify-green' : 'text-white'}">{row.title ?? 'Track'}</div>
-                <div class="truncate text-[10px] text-white/45">
-                  {row.album ?? ''}{row.album ? ' · ' : ''}{row.plays} {row.plays === 1 ? 'play' : 'plays'}{#if playingHere} · <span class="text-spotify-green">now playing</span>{/if}
-                </div>
-              </div>
-              {#if row.rating != null && row.rating > 0}
-                <span class="flex items-center gap-0.5 text-spotify-green">
-                  <Star class="size-3.5 fill-current" />
-                  <span class="text-sm font-bold tabular-nums">{row.rating}</span>
-                </span>
-              {/if}
-            </button>
-            <OpenInSpotifyLink uri={row.uri} />
+      <!-- stats: avg rating · artist rating (composite score) · rank — mirrors the library list -->
+      {#if stats}
+        <div class="grid grid-cols-3 gap-2 rounded-xl bg-white/[0.04] p-2 text-center" data-testid="artist-stats">
+          <div>
+            <div class="text-sm font-bold tabular-nums text-spotify-green">{stats.avg.toFixed(1)}</div>
+            <div class="text-[10px] text-white/45">avg rating</div>
           </div>
-        {/each}
-      </div>
+          <div>
+            <div class="text-sm font-bold tabular-nums text-spotify-green">{stats.rating}</div>
+            <div class="text-[10px] text-white/45">artist rating</div>
+          </div>
+          <div>
+            <div class="text-sm font-bold tabular-nums">#{stats.rank}</div>
+            <div class="text-[10px] text-white/45">of {stats.total} artists</div>
+          </div>
+        </div>
+      {/if}
+
+      <!-- top unrated (Last.fm playcount rank) -->
+      {#if topUnrated.length > 0}
+        <p class="px-1 text-[10px] font-semibold uppercase tracking-wider text-white/40">Top unrated</p>
+        <div class="flex flex-col gap-1" data-testid="top-unrated-list">
+          {#each topUnrated as t, i (t.uri)}
+            {@const playingHere = playback.state.track?.uri === t.uri}
+            <div class="flex items-center gap-1">
+              <button
+                type="button"
+                onclick={() => void goto(`/library/track/${encodeURIComponent(t.uri)}`)}
+                class="flex min-w-0 flex-1 items-center gap-3 rounded-xl bg-white/[0.03] p-2 text-left transition-colors hover:bg-white/[0.06]"
+              >
+                <span class="w-4 shrink-0 text-center text-xs font-bold tabular-nums text-white/40">{i + 1}</span>
+                {#if t.albumArtUrl}
+                  <img src={t.albumArtUrl} alt="" class="size-10 shrink-0 rounded-md object-cover shadow shadow-black/40" />
+                {:else}
+                  <div class="size-10 shrink-0 rounded-md bg-white/10"></div>
+                {/if}
+                <div class="min-w-0 flex-1">
+                  <div class="truncate text-sm font-medium {playingHere ? 'text-spotify-green' : 'text-white'}">{t.title}</div>
+                  <div class="truncate text-[10px] text-white/45">
+                    {formatPlays(t.playcount)} plays{#if playingHere} · <span class="text-spotify-green">now playing</span>{/if}
+                  </div>
+                </div>
+              </button>
+              <OpenInSpotifyLink uri={t.uri} />
+            </div>
+          {/each}
+        </div>
+      {:else if discoveryState === 'error'}
+        <p class="text-xs text-white/45">Couldn't load top tracks right now.</p>
+      {/if}
+
+      <!-- the artist's rated tracks in the library -->
+      {#if rated.length > 0}
+        <p class="mt-1 px-1 text-[10px] font-semibold uppercase tracking-wider text-white/40">{artistName} · in your library</p>
+        <div class="flex flex-col gap-1" data-testid="artist-list">
+          {#each rated as row (row.uri)}
+            {@const playingHere = playback.state.track?.uri === row.uri}
+            <div class="flex items-center gap-1">
+              <button
+                type="button"
+                onclick={() => void goto(`/library/track/${encodeURIComponent(row.uri)}`)}
+                class="flex min-w-0 flex-1 items-center gap-3 rounded-xl bg-white/[0.03] p-2 text-left transition-colors hover:bg-white/[0.06]"
+              >
+                {#if row.albumArtUrl}
+                  <img src={row.albumArtUrl} alt="" class="size-10 shrink-0 rounded-md object-cover shadow shadow-black/40" />
+                {:else}
+                  <div class="size-10 shrink-0 rounded-md bg-white/10"></div>
+                {/if}
+                <div class="min-w-0 flex-1">
+                  <div class="truncate text-sm font-medium {playingHere ? 'text-spotify-green' : 'text-white'}">{row.title ?? 'Track'}</div>
+                  <div class="truncate text-[10px] text-white/45">
+                    {row.album ?? ''}{row.album ? ' · ' : ''}{row.plays} {row.plays === 1 ? 'play' : 'plays'}{#if playingHere} · <span class="text-spotify-green">now playing</span>{/if}
+                  </div>
+                </div>
+                {#if row.rating != null && row.rating > 0}
+                  <span class="flex items-center gap-0.5 text-spotify-green">
+                    <Star class="size-3.5 fill-current" />
+                    <span class="text-sm font-bold tabular-nums">{row.rating}</span>
+                  </span>
+                {/if}
+              </button>
+              <OpenInSpotifyLink uri={row.uri} />
+            </div>
+          {/each}
+        </div>
+      {/if}
+
+      {#if empty}
+        <p class="text-xs text-white/45">Nothing from {artistName || 'this artist'} yet.</p>
+      {/if}
     {/if}
   {/if}
 

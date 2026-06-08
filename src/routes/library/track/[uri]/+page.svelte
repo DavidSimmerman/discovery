@@ -6,7 +6,7 @@
   import ArtistLink from '$lib/components/ArtistLink.svelte';
   import LabelChips from '$lib/components/LabelChips.svelte';
   import PremiumGate from '$lib/components/PremiumGate.svelte';
-  import OtherVersions from '$lib/components/OtherVersions.svelte';
+  import TabbedPanel from '$lib/components/TabbedPanel.svelte';
   import { getPlaybackStore } from '$lib/playback/player.svelte';
 
   type Track = {
@@ -122,5 +122,10 @@
     {#if error}{error}{/if}
   </div>
 
-  <OtherVersions trackUri={data.track.uri} currentUri={data.track.uri} />
+  <TabbedPanel
+    trackUri={data.track.uri}
+    artistName={data.track.artists[0] ?? ''}
+    {playback}
+    showQueue={false}
+  />
 </main>

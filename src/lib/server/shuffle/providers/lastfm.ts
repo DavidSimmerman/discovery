@@ -70,6 +70,43 @@ export async function fetchSimilarTracks(
   }));
 }
 
+export interface ArtistTopTrack {
+  title: string;
+  playcount: number;
+  rank: number; // 1-indexed global-playcount rank
+  mbid: string | null; // MusicBrainz recording ID, if Last.fm has it
+}
+
+/**
+ * Fetch an artist's top tracks, ranked by global Last.fm playcount. This is the
+ * "popularity ranking" Spotify removed from its track objects (Feb 2026) — we
+ * source the ordering from Last.fm and resolve titles to Spotify URIs elsewhere.
+ * Returns up to `limit` entries in rank order; empty array on any error.
+ */
+export async function fetchArtistTopTracks(
+  artist: string,
+  limit = 30,
+): Promise<ArtistTopTrack[]> {
+  const json = await call('artist.gettoptracks', {
+    artist,
+    limit: String(limit),
+    autocorrect: '1',
+  });
+  if (!json?.toptracks?.track) return [];
+  const tracks = Array.isArray(json.toptracks.track)
+    ? json.toptracks.track
+    : [json.toptracks.track];
+  return tracks
+    .map((t: any, i: number) => ({
+      title: t.name ?? '',
+      playcount: parseInt(t.playcount ?? '0', 10) || 0,
+      // Last.fm carries the rank in @attr.rank; fall back to array order.
+      rank: parseInt(t['@attr']?.rank ?? '', 10) || i + 1,
+      mbid: t.mbid || null,
+    }))
+    .filter((t: ArtistTopTrack) => t.title !== '');
+}
+
 /**
  * Fetch crowd-sourced tags for a track. Used as a mood/genre proxy when
  * audio features aren't available.

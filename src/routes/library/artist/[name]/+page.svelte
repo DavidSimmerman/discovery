@@ -2,8 +2,9 @@
   import { onMount } from 'svelte';
   import { page } from '$app/state';
   import { goto } from '$app/navigation';
-  import { ChevronLeft, ChevronDown, Star } from '@lucide/svelte';
+  import { ChevronLeft, ChevronDown, Star, ArrowUpDown } from '@lucide/svelte';
   import LibraryRow from '$lib/components/LibraryRow.svelte';
+  import { formatPlays } from '$lib/format';
   import { getPlaybackStore } from '$lib/playback/player.svelte';
   import ShuffleButton from '$lib/components/ShuffleButton.svelte';
   import PremiumGate from '$lib/components/PremiumGate.svelte';
@@ -29,7 +30,17 @@
     versions: Row[];    // all versions including primary, sorted by rating desc
   };
 
-  type Sort = 'rating' | 'name';
+  type Sort = 'rating' | 'name' | 'popular';
+
+  type PopularTrack = {
+    uri: string;
+    title: string;
+    album: string | null;
+    albumArtUrl: string | null;
+    playcount: number;
+    rank: number;
+    rating: number | null;
+  };
 
   const artistName = $derived(page.params.name ?? '');
 
@@ -37,12 +48,26 @@
   let loading = $state(true);
   let hasLoaded = $state(false);
   let error = $state<string | null>(null);
+
+  // The artist's most-played tracks (Last.fm), ranked by popularity — the whole
+  // catalog, including songs not in the user's library. Rendered below the
+  // library list so the rated songs appear instantly and this fills in
+  // underneath without shifting them.
+  let topPopular = $state<PopularTrack[]>([]);
+  let discoveryLoading = $state(true);
+
+  const SORT_LABEL: Record<Sort, string> = {
+    rating: 'Rating',
+    name: 'Alphabetical',
+    popular: 'Popular',
+  };
+  let sortMenuOpen = $state(false);
   const SORT_KEY = 'library:artist:sort';
 
   function loadSort(): Sort {
     if (typeof sessionStorage === 'undefined') return 'rating';
     const v = sessionStorage.getItem(SORT_KEY);
-    return v === 'name' || v === 'rating' ? v : 'rating';
+    return v === 'name' || v === 'rating' || v === 'popular' ? v : 'rating';
   }
 
   let sort = $state<Sort>(loadSort());
@@ -136,6 +161,22 @@
     }
   }
 
+  async function loadDiscovery() {
+    discoveryLoading = true;
+    try {
+      const res = await fetch(
+        `/api/library/artist/${encodeURIComponent(artistName)}/discovery?list=popular`,
+      );
+      if (!res.ok) return;
+      const data = await res.json();
+      topPopular = data.topPopular ?? [];
+    } catch {
+      // Best-effort discovery — leave the section empty on failure.
+    } finally {
+      discoveryLoading = false;
+    }
+  }
+
   function onRowClick(uri: string) {
     void goto(`/library/track/${encodeURIComponent(uri)}`);
   }
@@ -155,13 +196,15 @@
   }
 
   function setSort(next: Sort) {
-    if (sort === next) return;
+    sortMenuOpen = false;
+    // Rating/Alphabetical re-sort the already-loaded library rows client-side;
+    // Popular uses the separately-loaded catalog list. No refetch needed.
     sort = next;
-    void load();
   }
 
   onMount(() => {
     void load();
+    void loadDiscovery();
   });
 </script>
 
@@ -200,32 +243,89 @@
     </PremiumGate>
   </header>
 
-  <div class="flex gap-2 rounded-full border border-white/10 bg-white/[0.05] p-1 text-[11px]">
-    <button
-      type="button"
-      data-testid="artist-sort-rating"
-      aria-pressed={sort === 'rating'}
-      onclick={() => setSort('rating')}
-      class="flex-1 rounded-full py-1.5 transition-colors {sort === 'rating' ? 'bg-white/15 font-medium text-white' : 'text-white/60 hover:text-white'}"
-    >
-      Rating
-    </button>
-    <button
-      type="button"
-      data-testid="artist-sort-name"
-      aria-pressed={sort === 'name'}
-      onclick={() => setSort('name')}
-      class="flex-1 rounded-full py-1.5 transition-colors {sort === 'name' ? 'bg-white/15 font-medium text-white' : 'text-white/60 hover:text-white'}"
-    >
-      Alphabetical
-    </button>
+  <div class="flex justify-end">
+    <div class="relative">
+      <button
+        type="button"
+        data-testid="artist-sort-button"
+        aria-label="Sort"
+        aria-expanded={sortMenuOpen}
+        onclick={() => { sortMenuOpen = !sortMenuOpen; }}
+        class="flex shrink-0 items-center gap-1 rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-[11px] text-white/80 hover:bg-white/10"
+      >
+        <ArrowUpDown class="size-3" />
+        {SORT_LABEL[sort]}
+      </button>
+      {#if sortMenuOpen}
+        <div
+          class="absolute right-0 top-full z-10 mt-1 flex flex-col rounded-xl border border-white/10 bg-black/95 p-1 text-xs shadow-xl backdrop-blur"
+        >
+          {#each (['rating', 'name', 'popular'] as const) as opt (opt)}
+            <button
+              type="button"
+              role="menuitemradio"
+              aria-checked={sort === opt}
+              data-testid="artist-sort-{opt}"
+              onclick={() => setSort(opt)}
+              class="whitespace-nowrap rounded-lg px-3 py-1.5 text-left transition-colors {sort === opt ? 'bg-white/10 text-white' : 'text-white/70 hover:bg-white/5 hover:text-white'}"
+            >
+              {SORT_LABEL[opt]}
+            </button>
+          {/each}
+        </div>
+      {/if}
+    </div>
   </div>
 
   <div aria-live="polite" class="min-h-5 text-sm text-red-400">
     {#if error}{error}{/if}
   </div>
 
-  {#if loading && !hasLoaded}
+  {#if sort === 'popular'}
+    {#if discoveryLoading}
+      <div class="flex flex-col gap-2">
+        {#each [0, 1, 2, 3, 4] as i (i)}
+          <div class="flex items-center gap-3 rounded-xl bg-white/[0.04] p-2">
+            <div class="size-12 flex-shrink-0 animate-pulse rounded-lg bg-white/10"></div>
+            <div class="flex min-w-0 flex-1 flex-col gap-2">
+              <div class="h-3.5 w-2/3 animate-pulse rounded bg-white/10"></div>
+              <div class="h-2.5 w-1/2 animate-pulse rounded bg-white/10"></div>
+            </div>
+          </div>
+        {/each}
+      </div>
+    {:else if topPopular.length === 0}
+      <p class="py-8 text-center text-sm opacity-60">No popular tracks found for this artist.</p>
+    {:else}
+      <div class="flex flex-col gap-2" data-testid="artist-popular">
+        {#each topPopular as t, i (t.uri)}
+          <button
+            type="button"
+            data-testid="popular-row"
+            onclick={() => onRowClick(t.uri)}
+            class="flex w-full items-center gap-3 rounded-xl bg-white/[0.04] p-2 text-left transition-colors hover:bg-white/[0.08]"
+          >
+            <span class="w-5 flex-shrink-0 text-center text-sm font-bold tabular-nums text-white/40">{i + 1}</span>
+            {#if t.albumArtUrl}
+              <img src={t.albumArtUrl} alt="" class="size-12 flex-shrink-0 rounded-lg object-cover shadow-lg shadow-black/40" />
+            {:else}
+              <div class="size-12 flex-shrink-0 rounded-lg bg-white/10 shadow-lg shadow-black/40" aria-hidden="true"></div>
+            {/if}
+            <div class="min-w-0 flex-1">
+              <div class="truncate text-sm font-semibold">{t.title}</div>
+              <div class="truncate text-xs text-white/50">{formatPlays(t.playcount)} plays</div>
+            </div>
+            {#if t.rating != null && t.rating > 0}
+              <span class="flex flex-shrink-0 items-center gap-0.5 text-spotify-green">
+                <Star class="size-3.5 fill-current" />
+                <span class="text-sm font-bold tabular-nums">{t.rating}</span>
+              </span>
+            {/if}
+          </button>
+        {/each}
+      </div>
+    {/if}
+  {:else if loading && !hasLoaded}
     <div class="flex flex-col gap-2">
       {#each [0, 1, 2, 3, 4] as i (i)}
         <div class="flex items-center gap-3 rounded-xl bg-white/[0.04] p-2">

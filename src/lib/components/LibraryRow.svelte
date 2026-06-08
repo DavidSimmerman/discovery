@@ -15,7 +15,15 @@
     row,
     onclick,
     isPlaying = false,
-  }: { row: Row; onclick?: (uri: string) => void; isPlaying?: boolean } = $props();
+    rank = null,
+  }: {
+    row: Row;
+    onclick?: (uri: string) => void;
+    isPlaying?: boolean;
+    // Spotify listen rank (1 = most listened). When set, a rank number is shown
+    // on the left — used by the "Most listened" sort to convey ordering.
+    rank?: number | null;
+  } = $props();
 
   const artistText = $derived(row.artists.join(', '));
   const labelText = $derived(row.labels.slice(0, 2).join(', '));
@@ -38,6 +46,12 @@
   onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onclick?.(row.uri); } }}
   class="flex w-full cursor-pointer items-center gap-3 rounded-xl bg-white/[0.04] p-2 text-left transition-colors hover:bg-white/[0.08]"
 >
+  {#if rank != null}
+    <div class="w-6 flex-shrink-0 text-center text-sm font-semibold tabular-nums text-white/40">
+      {rank}
+    </div>
+  {/if}
+
   {#if row.albumArtUrl}
     <img
       src={row.albumArtUrl}

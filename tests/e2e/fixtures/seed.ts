@@ -176,6 +176,61 @@ export async function seedLibrary(userId: string, workerIndex: number): Promise<
   }
 }
 
+// --- Top-list seed (Spotify "Most listened") -------------------------------
+// user_top_tracks / user_top_artists cascade on user delete, so these need no
+// dedicated cleanup. The rank-1 track is deliberately NOT in the library (no
+// tracks/ratings row) to exercise the not-yet-in-library render + name fallback.
+
+export function topOnlyTrackUri(workerIndex: number): string {
+  const id = `TopOnlyAnthem${String(workerIndex).padStart(4, '0')}`.padEnd(22, '0').slice(0, 22);
+  return `spotify:track:${id}`;
+}
+
+export const TOP_ONLY_TRACK_NAME = 'Top Only Anthem';
+
+/**
+ * Seeds the user's Spotify top tracks (most-listened order):
+ *   rank 1 → a track NOT in the library (name fallback, no rating)
+ *   rank 2 → Midnight City (slot 0, rated 5)
+ *   rank 3 → Levitating   (slot 2, rated 3)
+ * Requires seedLibrary to have run first for the rank-2/3 metadata.
+ */
+export async function seedTopTracks(userId: string, workerIndex: number): Promise<void> {
+  const sql = getDb();
+  const rows: { rank: number; uri: string; name: string }[] = [
+    { rank: 1, uri: topOnlyTrackUri(workerIndex), name: TOP_ONLY_TRACK_NAME },
+    { rank: 2, uri: trackUri(workerIndex, 0), name: 'Midnight City' },
+    { rank: 3, uri: trackUri(workerIndex, 2), name: 'Levitating' },
+  ];
+  for (const r of rows) {
+    await sql`
+      INSERT INTO user_top_tracks (user_id, rank, spotify_track_uri, name)
+      VALUES (${userId}, ${r.rank}, ${r.uri}, ${r.name})
+    `;
+  }
+}
+
+/**
+ * Seeds the user's Spotify top artists (most-listened order):
+ *   rank 1 → Pink Floyd (NOT in the library → "Not rated yet")
+ *   rank 2 → M83        (in the library)
+ *   rank 3 → deadmau5   (in the library)
+ */
+export async function seedTopArtists(userId: string): Promise<void> {
+  const sql = getDb();
+  const rows: { rank: number; id: string; name: string }[] = [
+    { rank: 1, id: 'artist-pink-floyd', name: 'Pink Floyd' },
+    { rank: 2, id: 'artist-m83', name: 'M83' },
+    { rank: 3, id: 'artist-deadmau5', name: 'deadmau5' },
+  ];
+  for (const r of rows) {
+    await sql`
+      INSERT INTO user_top_artists (user_id, rank, spotify_artist_id, name)
+      VALUES (${userId}, ${r.rank}, ${r.id}, ${r.name})
+    `;
+  }
+}
+
 // A standalone multi-artist track for the artist-link drawer spec. Namespaced by
 // worker like the fixture tracks, but kept OUT of LIBRARY_FIXTURE so it doesn't
 // perturb the artist-count assertions in library.spec.

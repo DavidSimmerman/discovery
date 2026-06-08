@@ -1,8 +1,16 @@
 import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { listLibrary, libraryFacets, type LibrarySort } from '$lib/server/library';
+import { listLibrary, listTopTracks, libraryFacets, type LibrarySort } from '$lib/server/library';
+import { getValidAccessToken } from '$lib/server/tokens';
 
-const VALID_SORTS: readonly LibrarySort[] = ['recency', 'rating', 'name', 'artist', 'top'];
+const VALID_SORTS: readonly LibrarySort[] = [
+  'recency',
+  'rating',
+  'name',
+  'artist',
+  'top',
+  'listens',
+];
 
 export const GET: RequestHandler = async ({ locals, url }) => {
   if (!locals.user) throw error(401, 'not logged in');
@@ -59,10 +67,19 @@ export const GET: RequestHandler = async ({ locals, url }) => {
     opts.sort = rawSort as LibrarySort;
   }
 
-  const [rows, facets] = await Promise.all([
-    listLibrary(locals.user.id, opts),
-    libraryFacets(locals.user.id),
-  ]);
+  // "Most listened" is served from the cached Spotify top-tracks snapshot (which
+  // can include not-yet-in-library tracks), not the library listing. Hydrating
+  // metadata for not-yet-cached tracks needs an access token; fetch one
+  // best-effort so a token hiccup degrades to a name-only render rather than 500.
+  const rowsPromise =
+    opts.sort === 'listens'
+      ? getValidAccessToken(locals.user.id)
+          .then((t) => t.access_token)
+          .catch(() => null)
+          .then((accessToken) => listTopTracks(locals.user!.id, accessToken, { search: opts.search }))
+      : listLibrary(locals.user.id, opts);
+
+  const [rows, facets] = await Promise.all([rowsPromise, libraryFacets(locals.user.id)]);
 
   return json({ rows, facets }, { headers: { 'cache-control': 'no-store' } });
 };

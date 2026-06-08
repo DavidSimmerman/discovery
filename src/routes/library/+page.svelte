@@ -16,6 +16,7 @@
     albumArtUrl: string | null;
     rating: number | null;
     labels: string[];
+    rank?: number | null;
   };
 
   type ArtistAggRow = {
@@ -32,14 +33,15 @@
 
   type Tab = 'all' | 'rated' | 'labeled';
   type View = 'songs' | 'artists';
-  type SongSort = 'recency' | 'rating' | 'name' | 'artist';
-  type ArtistSort = 'score' | 'average' | 'name' | 'count';
+  type SongSort = 'recency' | 'rating' | 'name' | 'artist' | 'listens';
+  type ArtistSort = 'score' | 'average' | 'name' | 'count' | 'listens';
 
   const SONG_SORT_LABEL: Record<SongSort, string> = {
     recency: 'Recent',
     rating: 'Rating',
     name: 'Name',
     artist: 'Artist',
+    listens: 'Most listened',
   };
 
   const ARTIST_SORT_LABEL: Record<ArtistSort, string> = {
@@ -47,13 +49,19 @@
     average: 'Average',
     name: 'Name',
     count: 'Most rated',
+    listens: 'Most listened',
   };
 
   let rows = $state<Row[]>([]);
   let artistRows = $state<ArtistAggRow[]>([]);
+  // Spotify top artists (most-listened order) — a separate dataset from the
+  // rated-library aggregates above, loaded only when the "Most listened" sort
+  // is active since it can include artists not yet in the library.
+  let topArtistRows = $state<ArtistAggRow[]>([]);
   let facets = $state<Facets>({ total: 0, topLabels: [] });
   let loading = $state(true);
   let artistsLoading = $state(false);
+  let topArtistsLoading = $state(false);
   let error = $state<string | null>(null);
 
   type Persisted = {
@@ -101,6 +109,7 @@
 
   let hasLoaded = $state(false);
   let artistsLoaded = $state(false);
+  let topArtistsLoaded = $state(false);
 
   const visibleRows = $derived.by(() => {
     if (tab === 'rated') return rows.filter((r) => r.rating != null && r.rating > 0);
@@ -109,6 +118,8 @@
   });
 
   const sortedArtists = $derived.by(() => {
+    // "Most listened" comes from the server already in Spotify rank order.
+    if (artistSort === 'listens') return topArtistRows;
     const copy = [...artistRows];
     if (artistSort === 'name') {
       copy.sort((a, b) => a.name.localeCompare(b.name));
@@ -210,6 +221,37 @@
     }
   }
 
+  async function loadTopArtists() {
+    topArtistsLoading = true;
+    let ok = false;
+    try {
+      const res = await fetch('/api/library/artists?sort=listens');
+      if (!res.ok) {
+        error = "Couldn't load your top artists. Try again.";
+        return;
+      }
+      const data = await res.json();
+      topArtistRows = data.rows ?? [];
+      error = null;
+      ok = true;
+    } catch {
+      error = "Couldn't load your top artists. Check your connection.";
+    } finally {
+      topArtistsLoading = false;
+      if (ok) topArtistsLoaded = true;
+    }
+  }
+
+  // Load whichever artist dataset the current sort needs (the rated-library
+  // aggregates, or the Spotify top-artist snapshot for "Most listened").
+  function ensureArtistData() {
+    if (artistSort === 'listens') {
+      if (!topArtistsLoaded) void loadTopArtists();
+    } else if (!artistsLoaded) {
+      void loadArtists();
+    }
+  }
+
   function onSearchInput() {
     if (view === 'artists') return; // client-filtered, no debounce needed
     if (searchTimer !== null) clearTimeout(searchTimer);
@@ -237,7 +279,7 @@
     const prev = view;
     view = next;
     sortMenuOpen = false;
-    if (next === 'artists' && !artistsLoaded) void loadArtists();
+    if (next === 'artists') ensureArtistData();
     // Reload songs when returning to Songs: the user may have typed in the
     // shared search box while in Artists view, which skipped the song fetch.
     if (next === 'songs' && prev !== 'songs') void loadSongs();
@@ -252,6 +294,7 @@
   function setArtistSort(next: ArtistSort) {
     artistSort = next;
     sortMenuOpen = false;
+    ensureArtistData();
   }
 
   onMount(() => {
@@ -259,7 +302,7 @@
     if (page.url.searchParams.get('view') === 'artists') {
       view = 'artists';
     }
-    if (view === 'artists') void loadArtists();
+    if (view === 'artists') ensureArtistData();
     void loadSongs();
     return () => {
       if (searchTimer !== null) clearTimeout(searchTimer);
@@ -358,7 +401,7 @@
           <div
             class="absolute right-0 top-full z-10 mt-1 flex flex-col rounded-xl border border-white/10 bg-black/95 p-1 text-xs shadow-xl backdrop-blur"
           >
-            {#each (['recency', 'rating', 'name', 'artist'] as const) as opt (opt)}
+            {#each (['recency', 'rating', 'name', 'artist', 'listens'] as const) as opt (opt)}
               <button
                 type="button"
                 role="menuitemradio"
@@ -375,7 +418,9 @@
       </div>
     </div>
 
-    <!-- Rating + label chips -->
+    <!-- Rating + label chips. Hidden under "Most listened": that view is the
+         fixed Spotify top-50, not the filterable library. -->
+    {#if songSort !== 'listens'}
     <div class="-mx-1 flex flex-wrap gap-2 px-1">
       <button
         type="button"
@@ -416,6 +461,7 @@
         </button>
       {/each}
     </div>
+    {/if}
   {:else}
     <!-- Artists sort -->
     <div class="flex justify-end">
@@ -435,7 +481,7 @@
           <div
             class="absolute right-0 top-full z-10 mt-1 flex flex-col rounded-xl border border-white/10 bg-black/95 p-1 text-xs shadow-xl backdrop-blur"
           >
-            {#each (['score', 'average', 'name', 'count'] as const) as opt (opt)}
+            {#each (['score', 'average', 'name', 'count', 'listens'] as const) as opt (opt)}
               <button
                 type="button"
                 role="menuitemradio"
@@ -472,7 +518,9 @@
       </div>
     {:else if visibleRows.length === 0}
       <p class="py-8 text-center text-sm opacity-60">
-        {#if hasFilters}
+        {#if songSort === 'listens' && !hasFilters}
+          No Spotify listening data yet — listen on Spotify and check back.
+        {:else if hasFilters}
           No tracks match your filters.
         {:else}
           No rated or labeled tracks yet — go rate something on now-playing.
@@ -481,12 +529,12 @@
     {:else}
       <div class="flex flex-col gap-2">
         {#each visibleRows as row (row.uri)}
-          <LibraryRow {row} onclick={onRowClick} isPlaying={playback.state.track?.uri === row.uri} />
+          <LibraryRow {row} rank={row.rank ?? null} onclick={onRowClick} isPlaying={playback.state.track?.uri === row.uri} />
         {/each}
       </div>
     {/if}
   {:else}
-    {#if artistsLoading && !artistsLoaded}
+    {#if artistSort === 'listens' ? topArtistsLoading && !topArtistsLoaded : artistsLoading && !artistsLoaded}
       <div class="flex flex-col gap-2">
         {#each [0, 1, 2, 3, 4] as i (i)}
           <div class="flex items-center gap-3 rounded-xl bg-white/[0.04] p-2">
@@ -502,6 +550,8 @@
       <p class="py-8 text-center text-sm opacity-60">
         {#if search.trim() !== ''}
           No artists match your search.
+        {:else if artistSort === 'listens'}
+          No Spotify listening data yet — listen on Spotify and check back.
         {:else}
           No rated tracks yet — go rate something on now-playing.
         {/if}

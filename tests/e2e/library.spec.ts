@@ -9,6 +9,10 @@ import {
   SESSION_COOKIE_NAME,
   testUserId,
   testSpotifyId,
+  seedTopTracks,
+  seedTopArtists,
+  TOP_ONLY_TRACK_NAME,
+  topOnlyTrackUri,
 } from './fixtures/seed';
 
 // Library screen e2e. Same harness as rating/labels specs: OAuth bypassed via an
@@ -213,4 +217,79 @@ test('api: /api/library/artists returns a score for each artist', async ({ page 
     expect(row.avg).toBeGreaterThan(0);
     expect(row.avg).toBeLessThanOrEqual(5);
   }
+});
+
+// --- "Most listened" (Spotify top tracks/artists) sort ----------------------
+
+test('sort: most listened orders songs by Spotify rank, incl. not-in-library', async ({
+  page,
+}) => {
+  await seedTopTracks(testUserId(test.info().workerIndex), test.info().workerIndex);
+  await page.goto('/library');
+  await page.waitForLoadState('networkidle');
+  await page.getByTestId('library-sort-button').click();
+  await expect(page.getByTestId('library-sort-listens')).toBeVisible();
+  await page.getByTestId('library-sort-listens').click();
+
+  // Rank order: the not-in-library track (rank 1) first, then the rated ones.
+  const rows = page.getByTestId('library-row');
+  await expect(rows).toHaveCount(3);
+  await expect(rows.nth(0)).toContainText(TOP_ONLY_TRACK_NAME);
+  await expect(rows.nth(1)).toContainText('Midnight City');
+  await expect(rows.nth(2)).toContainText('Levitating');
+
+  // The rating/label filter chips are hidden in this view.
+  await expect(page.getByRole('button', { name: '★★★★★' })).toHaveCount(0);
+});
+
+test('api: /api/library?sort=listens returns top tracks in rank order', async ({ page }) => {
+  await seedTopTracks(testUserId(test.info().workerIndex), test.info().workerIndex);
+  const res = await page.request.get('/api/library?sort=listens');
+  expect(res.ok()).toBe(true);
+  const data = (await res.json()) as {
+    rows: { title: string | null; rank: number; rating: number | null }[];
+  };
+  expect(data.rows.map((r) => r.title)).toEqual(['Top Only Anthem', 'Midnight City', 'Levitating']);
+  expect(data.rows.map((r) => r.rank)).toEqual([1, 2, 3]);
+  // The not-in-library rank-1 track has no rating; the others keep their stars.
+  expect(data.rows[0].rating).toBeNull();
+  expect(data.rows[1].rating).toBe(5);
+});
+
+test('sort: most listened lists top artists incl. not-in-library', async ({ page }) => {
+  await seedTopArtists(testUserId(test.info().workerIndex));
+  await page.goto('/library');
+  await page.waitForLoadState('networkidle');
+  await page.getByTestId('library-view-artists').click({ force: true });
+  await page.getByTestId('artists-sort-button').click();
+  await page.getByTestId('artists-sort-listens').click();
+
+  const rows = page.getByTestId('artist-row');
+  await expect(rows).toHaveCount(3);
+  await expect(rows.nth(0)).toContainText('Pink Floyd');
+  await expect(rows.nth(0)).toContainText('Not rated yet');
+  await expect(rows.nth(1)).toContainText('M83');
+});
+
+test('api: /api/library/artists?sort=listens returns artists in rank order', async ({ page }) => {
+  await seedTopArtists(testUserId(test.info().workerIndex));
+  const res = await page.request.get('/api/library/artists?sort=listens');
+  expect(res.ok()).toBe(true);
+  const data = (await res.json()) as { rows: { name: string; count: number }[] };
+  expect(data.rows.map((r) => r.name)).toEqual(['Pink Floyd', 'M83', 'deadmau5']);
+  expect(data.rows[0].count).toBe(0); // Pink Floyd — not in the library
+  expect(data.rows[1].count).toBe(1); // M83 — one rated track
+});
+
+test('track page: an unhydrated top track opens (name fallback) instead of 404', async ({
+  page,
+}) => {
+  const workerIndex = test.info().workerIndex;
+  await seedTopTracks(testUserId(workerIndex), workerIndex);
+  // The rank-1 top track is never cached in `tracks` and has no rating/label —
+  // the degraded path where Spotify metadata hydration was skipped. It must
+  // still resolve via user_top_tracks so the row's click-through doesn't 404.
+  const res = await page.goto(`/library/track/${encodeURIComponent(topOnlyTrackUri(workerIndex))}`);
+  expect(res?.status()).toBe(200);
+  await expect(page.getByText(TOP_ONLY_TRACK_NAME, { exact: true })).toBeVisible();
 });

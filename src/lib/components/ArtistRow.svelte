@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { Plus } from '@lucide/svelte';
+
   type Row = {
     name: string;
     count: number;
@@ -12,8 +14,13 @@
     onclick,
   }: { row: Row; rank: number; onclick?: (name: string) => void } = $props();
 
+  // count 0 only occurs in the "Most listened" sort, for a top artist the user
+  // hasn't rated any tracks by yet. The library listings never emit count 0.
+  const inLibrary = $derived(row.count > 0);
   const scoreText = $derived(Math.round(row.score).toString());
-  const countText = $derived(`${row.count} ${row.count === 1 ? 'song' : 'songs'}`);
+  const countText = $derived(
+    inLibrary ? `${row.count} ${row.count === 1 ? 'song' : 'songs'}` : 'Not rated yet',
+  );
 </script>
 
 <div
@@ -34,11 +41,15 @@
   </div>
 
   <div class="min-w-0 flex-1">
-    <div class="truncate text-sm font-semibold">{row.name}</div>
-    <div class="truncate text-xs text-white/50">{countText}</div>
+    <div class="truncate text-sm font-semibold {inLibrary ? '' : 'text-white/75'}">{row.name}</div>
+    <div class="truncate text-xs {inLibrary ? 'text-white/50' : 'text-white/40'}">{countText}</div>
   </div>
 
-  <div class="flex flex-shrink-0 items-center gap-1 text-spotify-green">
-    <span class="text-sm font-bold tabular-nums">{scoreText}</span>
-  </div>
+  {#if inLibrary}
+    <div class="flex flex-shrink-0 items-center gap-1 text-spotify-green">
+      <span class="text-sm font-bold tabular-nums">{scoreText}</span>
+    </div>
+  {:else}
+    <Plus class="size-4 flex-shrink-0 text-white/30" aria-label="Not in your library yet" />
+  {/if}
 </div>

@@ -3,8 +3,18 @@ import { sql } from 'drizzle-orm';
 import { artistScore, type ScoredTrack } from '$lib/server/artist-score';
 import { getTopArtistRank, getTopTrackRank } from '$lib/server/top-lists';
 import { groupSongs, type Groupable } from '$lib/song-group';
+import { fetchTracks } from '$lib/server/spotify';
+import { largestAlbumArtUrl } from '$lib/server/tracks';
+import { tracks as tracksTable } from '$lib/server/db/schema';
 
-export type LibrarySort = 'recency' | 'rating' | 'name' | 'artist' | 'top';
+// 'listens' = the user's Spotify top tracks/artists, in most-listened order. It
+// is served by listTopTracks/listTopArtists, NOT the orderBy() switch, because
+// its base set is the cached top-50 snapshot (which can include items not yet in
+// the library) rather than the rated/labeled library.
+export type LibrarySort = 'recency' | 'rating' | 'name' | 'artist' | 'top' | 'listens';
+
+// Spotify caps /me/top/* at 50 and we never store more than that.
+const TOP_LISTENS_LIMIT = 50;
 
 // DB approach: src/lib/server/db/index.ts exports only the Drizzle `db` (the raw
 // postgres-js client is module-private), so these UNION/aggregate queries are
@@ -27,6 +37,9 @@ export type LibraryRow = {
   versionType: string | null;
   album: string | null;
   plays: number;
+  // Spotify top-track rank (1 = most listened). Only set by listTopTracks; left
+  // undefined by the library listings so the row shows no rank badge there.
+  rank?: number;
 };
 
 export async function listLibrary(
@@ -179,7 +192,7 @@ export async function getLibraryTrack(
   }>(sql`
     SELECT
       ${uri}::text AS uri,
-      t.title AS title,
+      COALESCE(t.title, utt.name) AS title,
       t.artists AS artists,
       t.album_art_url AS album_art_url,
       r.rating_stars AS rating,
@@ -201,6 +214,7 @@ export async function getLibraryTrack(
     LEFT JOIN ratings r ON r.spotify_track_uri = base.uri AND r.user_id = ${userId}
     LEFT JOIN track_labels tl ON tl.spotify_track_uri = base.uri AND tl.user_id = ${userId}
     LEFT JOIN labels l ON l.id = tl.label_id
+    LEFT JOIN user_top_tracks utt ON utt.spotify_track_uri = base.uri AND utt.user_id = ${userId}
     WHERE EXISTS (
       SELECT 1 FROM ratings WHERE user_id = ${userId} AND spotify_track_uri = ${uri}
       UNION
@@ -209,8 +223,13 @@ export async function getLibraryTrack(
       -- Also resolve cataloged-but-unrated tracks (e.g. an artist's "Top unrated"
       -- picks) so the track page can open them for rating without playback.
       SELECT 1 FROM tracks WHERE spotify_track_uri = ${uri}
+      UNION
+      -- And resolve "Most listened" top tracks that aren't cached yet (degraded
+      -- path: Spotify metadata hydration was skipped/failed). Falls back to the
+      -- name stored in the top-list snapshot so the page opens instead of 404ing.
+      SELECT 1 FROM user_top_tracks WHERE user_id = ${userId} AND spotify_track_uri = ${uri}
     )
-    GROUP BY t.title, t.artists, t.album_art_url, r.rating_stars,
+    GROUP BY t.title, utt.name, t.artists, t.album_art_url, r.rating_stars,
              t.song_family_id, t.canonical_title, t.primary_artist_id, t.version_type, t.album
   `);
 
@@ -230,6 +249,138 @@ export async function getLibraryTrack(
     album: row.album,
     plays: row.plays_count ?? 0,
   };
+}
+
+/**
+ * The user's Spotify top tracks in most-listened order (rank 1 first), capped at
+ * Spotify's top-50. Includes tracks the user hasn't added to their library yet;
+ * those carry a null rating. Metadata (title/artist/art) for not-yet-cached top
+ * tracks is hydrated from Spotify on a best-effort basis — if `accessToken` is
+ * null or Spotify is unavailable, we fall back to the track name stored in the
+ * cached top-list snapshot so the row still renders.
+ */
+export async function listTopTracks(
+  userId: string,
+  accessToken: string | null,
+  opts: { search?: string } = {},
+): Promise<LibraryRow[]> {
+  const { search } = opts;
+
+  const top = await db.execute<{ uri: string }>(sql`
+    SELECT spotify_track_uri AS uri FROM user_top_tracks
+    WHERE user_id = ${userId}
+    ORDER BY rank ASC
+  `);
+  if (top.length === 0) return [];
+
+  // Hydrate metadata for any top track not yet in the catalog cache so
+  // not-in-library tracks render with art + artist (and become openable on the
+  // track page). Best-effort: failures fall through to the name-only render.
+  if (accessToken) {
+    const uris = top.map((t) => t.uri);
+    const cached = await db.execute<{ uri: string }>(sql`
+      SELECT spotify_track_uri AS uri FROM tracks WHERE spotify_track_uri = ANY(${uris})
+    `);
+    const have = new Set(cached.map((r) => r.uri));
+    const missing = uris.filter((u) => !have.has(u));
+    if (missing.length > 0) {
+      try {
+        const fetched = await fetchTracks(accessToken, missing);
+        if (fetched.length > 0) {
+          const byUri = new Map(fetched.map((sp) => [sp.uri, sp]));
+          await db
+            .insert(tracksTable)
+            .values(
+              [...byUri.values()].map((sp) => ({
+                spotifyTrackUri: sp.uri,
+                isrc: sp.external_ids?.isrc ?? null,
+                title: sp.name,
+                artists: sp.artists.map((a) => a.name),
+                album: sp.album?.name ?? null,
+                albumArtUrl: largestAlbumArtUrl(sp),
+                durationMs: sp.duration_ms,
+              })),
+            )
+            .onConflictDoNothing();
+        }
+      } catch (err) {
+        console.error('[listTopTracks] metadata hydration failed', { userId, err });
+      }
+    }
+  }
+
+  // Match title (cached or name fallback) or any credited artist.
+  const searchFilter =
+    search !== undefined
+      ? sql` AND (
+          COALESCE(t.title, utt.name) ILIKE '%' || ${search} || '%'
+          OR EXISTS (SELECT 1 FROM unnest(t.artists) a WHERE a ILIKE '%' || ${search} || '%')
+        )`
+      : sql``;
+
+  const rows = await db.execute<{
+    uri: string;
+    title: string | null;
+    artists: string[] | null;
+    album_art_url: string | null;
+    rating: number | null;
+    labels: string[];
+    song_family_id: string | null;
+    canonical_title: string | null;
+    primary_artist_id: string | null;
+    version_type: string | null;
+    album: string | null;
+    plays_count: number;
+    rank: number;
+  }>(sql`
+    SELECT
+      utt.spotify_track_uri AS uri,
+      COALESCE(t.title, utt.name) AS title,
+      t.artists AS artists,
+      t.album_art_url AS album_art_url,
+      r.rating_stars AS rating,
+      COALESCE(
+        array_agg(l.name) FILTER (WHERE l.name IS NOT NULL),
+        ARRAY[]::text[]
+      ) AS labels,
+      t.song_family_id AS song_family_id,
+      t.canonical_title AS canonical_title,
+      t.primary_artist_id AS primary_artist_id,
+      t.version_type AS version_type,
+      t.album AS album,
+      COALESCE((
+        SELECT count(*)::int FROM plays p
+        WHERE p.user_id = ${userId} AND p.spotify_track_uri = utt.spotify_track_uri
+      ), 0) AS plays_count,
+      utt.rank AS rank
+    FROM user_top_tracks utt
+    LEFT JOIN tracks t ON t.spotify_track_uri = utt.spotify_track_uri
+    LEFT JOIN ratings r ON r.spotify_track_uri = utt.spotify_track_uri AND r.user_id = ${userId}
+    LEFT JOIN track_labels tl ON tl.spotify_track_uri = utt.spotify_track_uri AND tl.user_id = ${userId}
+    LEFT JOIN labels l ON l.id = tl.label_id
+    WHERE utt.user_id = ${userId}${searchFilter}
+    GROUP BY utt.spotify_track_uri, utt.rank, utt.name, t.title, t.artists, t.album_art_url,
+             r.rating_stars, t.song_family_id, t.canonical_title, t.primary_artist_id,
+             t.version_type, t.album
+    ORDER BY utt.rank ASC
+    LIMIT ${TOP_LISTENS_LIMIT}
+  `);
+
+  return rows.map((row) => ({
+    uri: row.uri,
+    title: row.title,
+    artists: row.artists ?? [],
+    albumArtUrl: row.album_art_url,
+    rating: row.rating,
+    labels: row.labels,
+    songFamilyId: row.song_family_id,
+    canonicalTitle: row.canonical_title,
+    primaryArtistId: row.primary_artist_id,
+    versionType: row.version_type,
+    album: row.album,
+    plays: row.plays_count ?? 0,
+    rank: row.rank,
+  }));
 }
 
 function orderBy(sort: LibrarySort) {
@@ -259,6 +410,8 @@ export type ArtistRow = {
   count: number;
   avg: number;
   score: number;
+  // Spotify top-artist rank (1 = most listened). Only set by listTopArtists.
+  rank?: number;
 };
 
 export async function listArtists(userId: string): Promise<ArtistRow[]> {
@@ -358,6 +511,33 @@ export async function listArtists(userId: string): Promise<ArtistRow[]> {
   // Default order: highest score first.
   out.sort((a, b) => b.score - a.score || b.count - a.count || a.name.localeCompare(b.name));
   return out;
+}
+
+/**
+ * The user's Spotify top artists in most-listened order (rank 1 first), capped at
+ * Spotify's top-50. Artists the user has rated tracks for carry their library
+ * aggregate (count/avg/score); artists not yet in the library carry count 0 so
+ * the UI can render them as "not rated yet".
+ */
+export async function listTopArtists(userId: string): Promise<ArtistRow[]> {
+  const top = await db.execute<{ name: string; rank: number }>(sql`
+    SELECT name, rank FROM user_top_artists
+    WHERE user_id = ${userId}
+    ORDER BY rank ASC
+  `);
+  if (top.length === 0) return [];
+
+  // Library aggregates, keyed by normalized name so casing differences between
+  // Spotify's top-artist name and the credited names on rated tracks still match.
+  const lib = await listArtists(userId);
+  const byKey = new Map(lib.map((a) => [a.name.trim().toLowerCase(), a]));
+
+  return top.map(({ name, rank }) => {
+    const hit = byKey.get(name.trim().toLowerCase());
+    return hit
+      ? { ...hit, rank }
+      : { name, count: 0, avg: 0, score: 0, rank };
+  });
 }
 
 export async function libraryFacets(

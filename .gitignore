@@ -25,6 +25,9 @@ vite.config.ts.timestamp-*
 # Local brainstorming artifacts
 .superpowers/
 
+# Nested git worktrees for feature branches (kept inside the repo, never committed)
+.worktrees/
+
 # Docker
 docker-compose.override.yml
 

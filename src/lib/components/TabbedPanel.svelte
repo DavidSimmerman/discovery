@@ -12,7 +12,7 @@
   // preload on track change so the tab pills show numbers without the user
   // opening them. Covers stays uncounted by design.
 
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { goto } from '$app/navigation';
   import { Play, Star, Loader2 } from '@lucide/svelte';
   import OpenInSpotifyLink from '$lib/components/OpenInSpotifyLink.svelte';
@@ -66,9 +66,15 @@
     trackUri,
     artistName,
     playback,
-  }: { trackUri: string; artistName: string; playback: PlaybackStore } = $props();
+    showQueue = true,
+  }: { trackUri: string; artistName: string; playback: PlaybackStore; showQueue?: boolean } =
+    $props();
 
-  let activeTab = $state<Tab>('queue');
+  // The Queue tab is now-playing-only (it mirrors Spotify's live sampler queue).
+  // Surfaces that don't sample (e.g. the song details page) pass showQueue=false.
+  // showQueue is effectively constant per surface, so capture it once for the
+  // initial tab (untrack avoids the "only captures initial value" warning).
+  let activeTab = $state<Tab>(untrack(() => (showQueue ? 'queue' : 'versions')));
   let loadedFor = $state<string | null>(null);
 
   // Versions / Artist data (preloaded on track change). null = not loaded yet.
@@ -112,7 +118,7 @@
 
   // Reload preloads + reset lazy state when the source track changes. Guard on
   // loadedFor so we don't re-fire when trackUri reactive churn fires the effect
-  // with the same URI (same pattern OtherVersions used).
+  // with the same URI.
   $effect(() => {
     const uri = trackUri;
     if (!uri || uri === loadedFor) return;
@@ -130,7 +136,7 @@
       if (activeTab === 'artist') void loadDiscovery(artistName);
     }
     // Refresh Spotify's queue too — it shifts as playback advances.
-    if (isSampling) void loadSpotifyQueue();
+    if (isSampling && showQueue) void loadSpotifyQueue();
   });
 
   // Default tab follows sampler state: sampling → queue, otherwise → versions.
@@ -138,7 +144,7 @@
   let userPickedTab = $state(false);
   $effect(() => {
     if (userPickedTab) return;
-    activeTab = isSampling ? 'queue' : 'versions';
+    activeTab = isSampling && showQueue ? 'queue' : 'versions';
   });
 
   function resetForUri(): void {
@@ -324,7 +330,7 @@
 <section class="flex w-full flex-col gap-3" data-testid="tabbed-panel">
   <!-- tab bar -->
   <div class="flex gap-1 rounded-full bg-white/[0.05] p-1 ring-1 ring-white/10">
-    {#if isSampling}
+    {#if isSampling && showQueue}
       <button
         type="button"
         data-testid="tab-queue"

@@ -126,15 +126,10 @@
     resetForUri();
     void loadVersions(uri);
     void loadArtist(artistName);
-    // Discovery is keyed by artist, not track: only reset (and reload, if the
-    // Artist tab is open) when the artist actually changes.
-    if (discoveryFor !== artistName) {
-      discoveryAc?.abort();
-      discoveryData = null;
-      discoveryState = 'idle';
-      discoveryFor = null;
-      if (activeTab === 'artist') void loadDiscovery(artistName);
-    }
+    // Preload discovery (stats + top unrated) as soon as the track plays so the
+    // Artist tab is ready when opened — no late pop-in. Keyed by artist, so
+    // consecutive tracks by the same artist reuse the in-flight/loaded result.
+    if (discoveryFor !== artistName) void loadDiscovery(artistName);
     // Refresh Spotify's queue too — it shifts as playback advances.
     if (isSampling && showQueue) void loadSpotifyQueue();
   });
@@ -215,6 +210,7 @@
     const ac = new AbortController();
     discoveryAc = ac;
     discoveryState = 'loading';
+    discoveryData = null; // drop the previous artist's data so it can't flash
     try {
       const res = await fetch(
         `/api/library/artist/${encodeURIComponent(trimmed)}/discovery`,
@@ -491,107 +487,109 @@
     {@const stats = discoveryData?.stats ?? null}
     {@const topUnrated = discoveryData?.topUnrated ?? []}
     {@const rated = artistData ?? []}
+    {@const tabLoading =
+      artistData == null || discoveryState === 'idle' || discoveryState === 'loading'}
     {@const empty =
-      discoveryState === 'done' &&
-      artistData != null &&
-      !stats &&
-      topUnrated.length === 0 &&
-      rated.length === 0}
+      !stats && topUnrated.length === 0 && rated.length === 0 && discoveryState !== 'error'}
 
-    <!-- stats: avg rating · artist rating (composite score) · rank — mirrors the library list -->
-    {#if stats}
-      <div class="grid grid-cols-3 gap-2 rounded-xl bg-white/[0.04] p-2 text-center" data-testid="artist-stats">
-        <div>
-          <div class="text-sm font-bold tabular-nums text-spotify-green">{stats.avg.toFixed(1)}</div>
-          <div class="text-[10px] text-white/45">avg rating</div>
-        </div>
-        <div>
-          <div class="text-sm font-bold tabular-nums text-spotify-green">{stats.rating}</div>
-          <div class="text-[10px] text-white/45">artist rating</div>
-        </div>
-        <div>
-          <div class="text-sm font-bold tabular-nums">#{stats.rank}</div>
-          <div class="text-[10px] text-white/45">of {stats.total} artists</div>
-        </div>
-      </div>
-    {/if}
-
-    <!-- top unrated (Last.fm playcount rank) -->
-    {#if discoveryState === 'loading' && discoveryData == null}
+    {#if tabLoading}
+      <!-- One unified spinner for the whole tab: don't reveal the library songs
+           and then re-flow when discovery (stats + top unrated) lands. -->
       <div class="flex items-center gap-2 text-xs text-white/45">
         <Loader2 class="size-3.5 animate-spin" />
-        Finding {artistName || 'this artist'}'s top tracks…
+        Loading {artistName || 'artist'}…
       </div>
-    {:else if topUnrated.length > 0}
-      <p class="px-1 text-[10px] font-semibold uppercase tracking-wider text-white/40">Top unrated</p>
-      <div class="flex flex-col gap-1" data-testid="top-unrated-list">
-        {#each topUnrated as t, i (t.uri)}
-          {@const playingHere = playback.state.track?.uri === t.uri}
-          <div class="flex items-center gap-1">
-            <button
-              type="button"
-              onclick={() => void goto(`/library/track/${encodeURIComponent(t.uri)}`)}
-              class="flex min-w-0 flex-1 items-center gap-3 rounded-xl bg-white/[0.03] p-2 text-left transition-colors hover:bg-white/[0.06]"
-            >
-              <span class="w-4 shrink-0 text-center text-xs font-bold tabular-nums text-white/40">{i + 1}</span>
-              {#if t.albumArtUrl}
-                <img src={t.albumArtUrl} alt="" class="size-10 shrink-0 rounded-md object-cover shadow shadow-black/40" />
-              {:else}
-                <div class="size-10 shrink-0 rounded-md bg-white/10"></div>
-              {/if}
-              <div class="min-w-0 flex-1">
-                <div class="truncate text-sm font-medium {playingHere ? 'text-spotify-green' : 'text-white'}">{t.title}</div>
-                <div class="truncate text-[10px] text-white/45">
-                  {formatPlays(t.playcount)} plays{#if playingHere} · <span class="text-spotify-green">now playing</span>{/if}
-                </div>
-              </div>
-            </button>
-            <OpenInSpotifyLink uri={t.uri} />
+    {:else}
+      <!-- stats: avg rating · artist rating (composite score) · rank — mirrors the library list -->
+      {#if stats}
+        <div class="grid grid-cols-3 gap-2 rounded-xl bg-white/[0.04] p-2 text-center" data-testid="artist-stats">
+          <div>
+            <div class="text-sm font-bold tabular-nums text-spotify-green">{stats.avg.toFixed(1)}</div>
+            <div class="text-[10px] text-white/45">avg rating</div>
           </div>
-        {/each}
-      </div>
-    {:else if discoveryState === 'error'}
-      <p class="text-xs text-white/45">Couldn't load top tracks right now.</p>
-    {/if}
-
-    <!-- the artist's rated tracks in the library -->
-    {#if rated.length > 0}
-      <p class="mt-1 px-1 text-[10px] font-semibold uppercase tracking-wider text-white/40">{artistName} · in your library</p>
-      <div class="flex flex-col gap-1" data-testid="artist-list">
-        {#each rated as row (row.uri)}
-          {@const playingHere = playback.state.track?.uri === row.uri}
-          <div class="flex items-center gap-1">
-            <button
-              type="button"
-              onclick={() => void goto(`/library/track/${encodeURIComponent(row.uri)}`)}
-              class="flex min-w-0 flex-1 items-center gap-3 rounded-xl bg-white/[0.03] p-2 text-left transition-colors hover:bg-white/[0.06]"
-            >
-              {#if row.albumArtUrl}
-                <img src={row.albumArtUrl} alt="" class="size-10 shrink-0 rounded-md object-cover shadow shadow-black/40" />
-              {:else}
-                <div class="size-10 shrink-0 rounded-md bg-white/10"></div>
-              {/if}
-              <div class="min-w-0 flex-1">
-                <div class="truncate text-sm font-medium {playingHere ? 'text-spotify-green' : 'text-white'}">{row.title ?? 'Track'}</div>
-                <div class="truncate text-[10px] text-white/45">
-                  {row.album ?? ''}{row.album ? ' · ' : ''}{row.plays} {row.plays === 1 ? 'play' : 'plays'}{#if playingHere} · <span class="text-spotify-green">now playing</span>{/if}
-                </div>
-              </div>
-              {#if row.rating != null && row.rating > 0}
-                <span class="flex items-center gap-0.5 text-spotify-green">
-                  <Star class="size-3.5 fill-current" />
-                  <span class="text-sm font-bold tabular-nums">{row.rating}</span>
-                </span>
-              {/if}
-            </button>
-            <OpenInSpotifyLink uri={row.uri} />
+          <div>
+            <div class="text-sm font-bold tabular-nums text-spotify-green">{stats.rating}</div>
+            <div class="text-[10px] text-white/45">artist rating</div>
           </div>
-        {/each}
-      </div>
-    {/if}
+          <div>
+            <div class="text-sm font-bold tabular-nums">#{stats.rank}</div>
+            <div class="text-[10px] text-white/45">of {stats.total} artists</div>
+          </div>
+        </div>
+      {/if}
 
-    {#if empty}
-      <p class="text-xs text-white/45">Nothing from {artistName || 'this artist'} yet.</p>
+      <!-- top unrated (Last.fm playcount rank) -->
+      {#if topUnrated.length > 0}
+        <p class="px-1 text-[10px] font-semibold uppercase tracking-wider text-white/40">Top unrated</p>
+        <div class="flex flex-col gap-1" data-testid="top-unrated-list">
+          {#each topUnrated as t, i (t.uri)}
+            {@const playingHere = playback.state.track?.uri === t.uri}
+            <div class="flex items-center gap-1">
+              <button
+                type="button"
+                onclick={() => void goto(`/library/track/${encodeURIComponent(t.uri)}`)}
+                class="flex min-w-0 flex-1 items-center gap-3 rounded-xl bg-white/[0.03] p-2 text-left transition-colors hover:bg-white/[0.06]"
+              >
+                <span class="w-4 shrink-0 text-center text-xs font-bold tabular-nums text-white/40">{i + 1}</span>
+                {#if t.albumArtUrl}
+                  <img src={t.albumArtUrl} alt="" class="size-10 shrink-0 rounded-md object-cover shadow shadow-black/40" />
+                {:else}
+                  <div class="size-10 shrink-0 rounded-md bg-white/10"></div>
+                {/if}
+                <div class="min-w-0 flex-1">
+                  <div class="truncate text-sm font-medium {playingHere ? 'text-spotify-green' : 'text-white'}">{t.title}</div>
+                  <div class="truncate text-[10px] text-white/45">
+                    {formatPlays(t.playcount)} plays{#if playingHere} · <span class="text-spotify-green">now playing</span>{/if}
+                  </div>
+                </div>
+              </button>
+              <OpenInSpotifyLink uri={t.uri} />
+            </div>
+          {/each}
+        </div>
+      {:else if discoveryState === 'error'}
+        <p class="text-xs text-white/45">Couldn't load top tracks right now.</p>
+      {/if}
+
+      <!-- the artist's rated tracks in the library -->
+      {#if rated.length > 0}
+        <p class="mt-1 px-1 text-[10px] font-semibold uppercase tracking-wider text-white/40">{artistName} · in your library</p>
+        <div class="flex flex-col gap-1" data-testid="artist-list">
+          {#each rated as row (row.uri)}
+            {@const playingHere = playback.state.track?.uri === row.uri}
+            <div class="flex items-center gap-1">
+              <button
+                type="button"
+                onclick={() => void goto(`/library/track/${encodeURIComponent(row.uri)}`)}
+                class="flex min-w-0 flex-1 items-center gap-3 rounded-xl bg-white/[0.03] p-2 text-left transition-colors hover:bg-white/[0.06]"
+              >
+                {#if row.albumArtUrl}
+                  <img src={row.albumArtUrl} alt="" class="size-10 shrink-0 rounded-md object-cover shadow shadow-black/40" />
+                {:else}
+                  <div class="size-10 shrink-0 rounded-md bg-white/10"></div>
+                {/if}
+                <div class="min-w-0 flex-1">
+                  <div class="truncate text-sm font-medium {playingHere ? 'text-spotify-green' : 'text-white'}">{row.title ?? 'Track'}</div>
+                  <div class="truncate text-[10px] text-white/45">
+                    {row.album ?? ''}{row.album ? ' · ' : ''}{row.plays} {row.plays === 1 ? 'play' : 'plays'}{#if playingHere} · <span class="text-spotify-green">now playing</span>{/if}
+                  </div>
+                </div>
+                {#if row.rating != null && row.rating > 0}
+                  <span class="flex items-center gap-0.5 text-spotify-green">
+                    <Star class="size-3.5 fill-current" />
+                    <span class="text-sm font-bold tabular-nums">{row.rating}</span>
+                  </span>
+                {/if}
+              </button>
+              <OpenInSpotifyLink uri={row.uri} />
+            </div>
+          {/each}
+        </div>
+      {/if}
+
+      {#if empty}
+        <p class="text-xs text-white/45">Nothing from {artistName || 'this artist'} yet.</p>
+      {/if}
     {/if}
   {/if}
 

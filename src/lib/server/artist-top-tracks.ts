@@ -51,6 +51,8 @@ export type ArtistStats = {
   count: number; // songs rated for this artist
 };
 
+export type PopularTrack = TopUnratedTrack & { rating: number | null };
+
 // ── pure helpers (unit-tested) ─────────────────────────────────────────────
 
 /** Normalize an artist display name to the cache key: trimmed + lowercased. */
@@ -89,6 +91,35 @@ export function pickTopUnrated(
       albumArtUrl: r.albumArtUrl,
       playcount: r.playcount,
       rank: r.rank,
+    });
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+/**
+ * Like pickTopUnrated but keeps the whole catalog (rated or not), in rank order,
+ * annotating each track with the reader's star rating (null if unrated). Pure.
+ */
+export function pickTopPopular(
+  rows: CacheRow[],
+  ratedByUri: ReadonlyMap<string, number>,
+  ratedByIsrc: ReadonlyMap<string, number>,
+  limit: number,
+): PopularTrack[] {
+  const out: PopularTrack[] = [];
+  for (const r of [...rows].sort((a, b) => a.rank - b.rank)) {
+    if (!r.spotifyTrackUri) continue; // unresolved — no playable/openable URI
+    const rating =
+      ratedByUri.get(r.spotifyTrackUri) ?? (r.isrc ? ratedByIsrc.get(r.isrc) : undefined) ?? null;
+    out.push({
+      uri: r.spotifyTrackUri,
+      title: r.lastfmTitle,
+      album: r.album,
+      albumArtUrl: r.albumArtUrl,
+      playcount: r.playcount,
+      rank: r.rank,
+      rating,
     });
     if (out.length >= limit) break;
   }
@@ -249,26 +280,28 @@ async function cacheIsFresh(artistKey: string): Promise<boolean> {
   return Date.now() - new Date(fetchedAt).getTime() < ARTIST_CATALOG_TTL_MS;
 }
 
-async function loadRatedSets(
+// The reader's star rating for each candidate track, keyed by URI and by ISRC
+// (the latter catches the same recording rated under a different URI).
+async function loadRatedStars(
   userId: string,
   uris: string[],
   isrcs: string[],
-): Promise<{ ratedUris: Set<string>; ratedIsrcs: Set<string> }> {
-  const ratedUris = new Set<string>();
-  const ratedIsrcs = new Set<string>();
-  if (uris.length === 0 && isrcs.length === 0) return { ratedUris, ratedIsrcs };
+): Promise<{ byUri: Map<string, number>; byIsrc: Map<string, number> }> {
+  const byUri = new Map<string, number>();
+  const byIsrc = new Map<string, number>();
+  if (uris.length === 0 && isrcs.length === 0) return { byUri, byIsrc };
   const conds = [];
   if (uris.length > 0) conds.push(inArray(ratings.spotifyTrackUri, uris));
   if (isrcs.length > 0) conds.push(inArray(ratings.isrc, isrcs));
   const rated = await db
-    .select({ uri: ratings.spotifyTrackUri, isrc: ratings.isrc })
+    .select({ uri: ratings.spotifyTrackUri, isrc: ratings.isrc, stars: ratings.ratingStars })
     .from(ratings)
     .where(and(eq(ratings.userId, userId), or(...conds)));
   for (const r of rated) {
-    ratedUris.add(r.uri);
-    if (r.isrc) ratedIsrcs.add(r.isrc);
+    byUri.set(r.uri, r.stars);
+    if (r.isrc) byIsrc.set(r.isrc, r.stars);
   }
-  return { ratedUris, ratedIsrcs };
+  return { byUri, byIsrc };
 }
 
 /**
@@ -308,9 +341,51 @@ export async function getArtistTopUnrated(
 
   const uris = rows.map((r) => r.spotifyTrackUri).filter((u): u is string => !!u);
   const isrcs = rows.map((r) => r.isrc).filter((i): i is string => !!i);
-  const { ratedUris, ratedIsrcs } = await loadRatedSets(userId, uris, isrcs);
+  const { byUri, byIsrc } = await loadRatedStars(userId, uris, isrcs);
 
-  return pickTopUnrated(rows, ratedUris, ratedIsrcs, limit);
+  return pickTopUnrated(rows, new Set(byUri.keys()), new Set(byIsrc.keys()), limit);
+}
+
+/**
+ * Top `limit` tracks by this artist ranked by Last.fm global playcount —
+ * everything in the catalog, including songs the user hasn't added to their
+ * library. Each track is annotated with the reader's rating (null if unrated).
+ */
+export async function getArtistTopPopular(
+  userId: string,
+  artistName: string,
+  accessToken: string,
+  limit = 30,
+): Promise<PopularTrack[]> {
+  const artistKey = normalizeArtistKey(artistName);
+  if (artistKey === '') return [];
+
+  if (!(await cacheIsFresh(artistKey))) {
+    try {
+      await refreshArtistCatalog(artistKey, artistName, accessToken);
+    } catch (err) {
+      console.error('[artist-top-tracks] refresh failed', artistKey, err);
+    }
+  }
+
+  const rows = (await db
+    .select({
+      rank: artistTopTracks.rank,
+      lastfmTitle: artistTopTracks.lastfmTitle,
+      spotifyTrackUri: artistTopTracks.spotifyTrackUri,
+      isrc: artistTopTracks.isrc,
+      album: artistTopTracks.album,
+      albumArtUrl: artistTopTracks.albumArtUrl,
+      playcount: artistTopTracks.playcount,
+    })
+    .from(artistTopTracks)
+    .where(eq(artistTopTracks.artistKey, artistKey))) as CacheRow[];
+
+  const uris = rows.map((r) => r.spotifyTrackUri).filter((u): u is string => !!u);
+  const isrcs = rows.map((r) => r.isrc).filter((i): i is string => !!i);
+  const { byUri, byIsrc } = await loadRatedStars(userId, uris, isrcs);
+
+  return pickTopPopular(rows, byUri, byIsrc, limit);
 }
 
 /**

@@ -17,6 +17,7 @@ import {
   normalizeArtistKey,
   normalizeTitle,
   pickTopUnrated,
+  pickTopPopular,
   type CacheRow,
 } from '$lib/server/artist-top-tracks';
 
@@ -64,5 +65,32 @@ describe('pickTopUnrated', () => {
   it('returns empty when everything is filtered out', () => {
     const rows: CacheRow[] = [row(1, null, null), row(2, 'uri:b', null)];
     expect(pickTopUnrated(rows, new Set(['uri:b']), new Set(), 10)).toEqual([]);
+  });
+});
+
+describe('pickTopPopular', () => {
+  it('keeps all resolved tracks in rank order and annotates ratings', () => {
+    const rows: CacheRow[] = [
+      row(2, 'uri:b', 'ISRC_B', 90),
+      row(1, 'uri:a', 'ISRC_A', 100),
+      row(3, null, null, 80), // unresolved → dropped
+    ];
+    const out = pickTopPopular(rows, new Map([['uri:a', 5]]), new Map([['ISRC_B', 3]]), 10);
+    expect(out.map((t) => [t.uri, t.rating])).toEqual([
+      ['uri:a', 5],
+      ['uri:b', 3],
+    ]);
+  });
+
+  it('rates by ISRC when the URI differs, else null', () => {
+    const rows: CacheRow[] = [row(1, 'uri:x', 'ISRC_X'), row(2, 'uri:y', null)];
+    const out = pickTopPopular(rows, new Map(), new Map([['ISRC_X', 4]]), 10);
+    expect(out[0].rating).toBe(4); // matched via ISRC
+    expect(out[1].rating).toBeNull(); // no rating
+  });
+
+  it('caps at the limit', () => {
+    const rows: CacheRow[] = [1, 2, 3].map((r) => row(r, `uri:${r}`, null));
+    expect(pickTopPopular(rows, new Map(), new Map(), 2).map((t) => t.uri)).toEqual(['uri:1', 'uri:2']);
   });
 });

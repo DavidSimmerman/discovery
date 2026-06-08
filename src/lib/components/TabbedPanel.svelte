@@ -530,9 +530,8 @@
           <div class="flex items-center gap-1">
             <button
               type="button"
-              onclick={() => { if (!playingHere) playEntry(t.uri); }}
-              disabled={playingHere}
-              class="flex min-w-0 flex-1 items-center gap-3 rounded-xl bg-white/[0.03] p-2 text-left transition-colors hover:bg-white/[0.06] disabled:cursor-default disabled:bg-white/[0.06]"
+              onclick={() => void goto(`/library/track/${encodeURIComponent(t.uri)}`)}
+              class="flex min-w-0 flex-1 items-center gap-3 rounded-xl bg-white/[0.03] p-2 text-left transition-colors hover:bg-white/[0.06]"
             >
               <span class="w-4 shrink-0 text-center text-xs font-bold tabular-nums text-white/40">{i + 1}</span>
               {#if t.albumArtUrl}
@@ -564,9 +563,8 @@
           <div class="flex items-center gap-1">
             <button
               type="button"
-              onclick={() => { if (!playingHere) playEntry(row.uri); }}
-              disabled={playingHere}
-              class="flex min-w-0 flex-1 items-center gap-3 rounded-xl bg-white/[0.03] p-2 text-left transition-colors hover:bg-white/[0.06] disabled:cursor-default disabled:bg-white/[0.06]"
+              onclick={() => void goto(`/library/track/${encodeURIComponent(row.uri)}`)}
+              class="flex min-w-0 flex-1 items-center gap-3 rounded-xl bg-white/[0.03] p-2 text-left transition-colors hover:bg-white/[0.06]"
             >
               {#if row.albumArtUrl}
                 <img src={row.albumArtUrl} alt="" class="size-10 shrink-0 rounded-md object-cover shadow shadow-black/40" />

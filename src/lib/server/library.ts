@@ -1,5 +1,5 @@
 import { db } from '$lib/server/db';
-import { sql } from 'drizzle-orm';
+import { sql, inArray } from 'drizzle-orm';
 import { artistScore, type ScoredTrack } from '$lib/server/artist-score';
 import { getTopArtistRank, getTopTrackRank } from '$lib/server/top-lists';
 import { groupSongs, type Groupable } from '$lib/song-group';
@@ -278,9 +278,13 @@ export async function listTopTracks(
   // track page). Best-effort: failures fall through to the name-only render.
   if (accessToken) {
     const uris = top.map((t) => t.uri);
-    const cached = await db.execute<{ uri: string }>(sql`
-      SELECT spotify_track_uri AS uri FROM tracks WHERE spotify_track_uri = ANY(${uris})
-    `);
+    // Use inArray (not a raw `= ANY(${uris})`): Drizzle's sql template expands an
+    // interpolated JS array into comma-separated placeholders, which would make
+    // ANY(...) invalid SQL and throw before the hydration try/catch below.
+    const cached = await db
+      .select({ uri: tracksTable.spotifyTrackUri })
+      .from(tracksTable)
+      .where(inArray(tracksTable.spotifyTrackUri, uris));
     const have = new Set(cached.map((r) => r.uri));
     const missing = uris.filter((u) => !have.has(u));
     if (missing.length > 0) {

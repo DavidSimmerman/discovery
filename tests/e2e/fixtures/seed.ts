@@ -231,6 +231,23 @@ export async function seedTopArtists(userId: string): Promise<void> {
   }
 }
 
+/**
+ * Seeds a fresh (non-expired) Spotify token row so getValidAccessToken returns
+ * an access token without hitting Spotify's refresh endpoint. The access token
+ * is fake — any actual Spotify call (e.g. listTopTracks' metadata hydration)
+ * will 401 and be swallowed — but it's enough to exercise the token-present
+ * code path that a tokenless test user can't reach.
+ */
+export async function seedSpotifyToken(userId: string): Promise<void> {
+  const sql = getDb();
+  await sql`
+    INSERT INTO spotify_tokens (user_id, refresh_token_enc, access_token, expires_at)
+    VALUES (${userId}, ${Buffer.from([0])}, ${'fake-access-token'}, ${new Date(Date.now() + 3_600_000)})
+    ON CONFLICT (user_id) DO UPDATE
+      SET access_token = EXCLUDED.access_token, expires_at = EXCLUDED.expires_at
+  `;
+}
+
 // A standalone multi-artist track for the artist-link drawer spec. Namespaced by
 // worker like the fixture tracks, but kept OUT of LIBRARY_FIXTURE so it doesn't
 // perturb the artist-count assertions in library.spec.

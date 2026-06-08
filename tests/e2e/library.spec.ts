@@ -13,6 +13,7 @@ import {
   seedTopArtists,
   TOP_ONLY_TRACK_NAME,
   topOnlyTrackUri,
+  seedSpotifyToken,
 } from './fixtures/seed';
 
 // Library screen e2e. Same harness as rating/labels specs: OAuth bypassed via an
@@ -292,4 +293,19 @@ test('track page: an unhydrated top track opens (name fallback) instead of 404',
   const res = await page.goto(`/library/track/${encodeURIComponent(topOnlyTrackUri(workerIndex))}`);
   expect(res?.status()).toBe(200);
   await expect(page.getByText(TOP_ONLY_TRACK_NAME, { exact: true })).toBeVisible();
+});
+
+test('sort: most listened succeeds for a user WITH a Spotify token (hydration path)', async ({
+  page,
+}) => {
+  const workerIndex = test.info().workerIndex;
+  await seedTopTracks(testUserId(workerIndex), workerIndex);
+  // A token present means the metadata-hydration block runs — the path real
+  // users hit. (A tokenless test user skips it.) The hydration's Spotify call
+  // 401s on the fake token and is swallowed; the request must still succeed.
+  await seedSpotifyToken(testUserId(workerIndex));
+  const res = await page.request.get('/api/library?sort=listens');
+  expect(res.ok()).toBe(true);
+  const data = (await res.json()) as { rows: { title: string | null }[] };
+  expect(data.rows.map((r) => r.title)).toEqual(['Top Only Anthem', 'Midnight City', 'Levitating']);
 });

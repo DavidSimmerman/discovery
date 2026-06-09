@@ -137,6 +137,52 @@ export function libraryTrackUris(workerIndex: number): string[] {
   return LIBRARY_FIXTURE.map((t) => trackUri(workerIndex, t.slot));
 }
 
+// --- Bulk seed (pagination / lazy-load) ------------------------------------
+// A separate URI namespace ("PG…") from the 4-track LIBRARY_FIXTURE so this and
+// the main library spec never collide on the shared, non-cascading tracks table.
+
+function bulkTrackUri(workerIndex: number, i: number): string {
+  // 22-char id: "PG" + worker(2) + index(5), zero-padded — unique per (worker, i).
+  const id = `PG${String(workerIndex).padStart(2, '0')}${String(i).padStart(5, '0')}`
+    .padEnd(22, '0')
+    .slice(0, 22);
+  return `spotify:track:${id}`;
+}
+
+export function bulkTrackUris(workerIndex: number, count: number): string[] {
+  return Array.from({ length: count }, (_, i) => bulkTrackUri(workerIndex, i));
+}
+
+/** Seed `count` rated tracks (rating 3) for the user — for pagination tests. */
+export async function seedManyRated(
+  userId: string,
+  workerIndex: number,
+  count: number,
+): Promise<void> {
+  const sql = getDb();
+  for (let i = 0; i < count; i++) {
+    const uri = bulkTrackUri(workerIndex, i);
+    // Zero-padded ordinal in the title so recency-sort order is deterministic and
+    // a specific late row (e.g. "Bulk Track 00059") can be asserted after scroll.
+    const title = `Bulk Track ${String(i).padStart(5, '0')}`;
+    await sql`
+      INSERT INTO tracks (spotify_track_uri, title, artists, album_art_url)
+      VALUES (${uri}, ${title}, ${['Bulk Artist']}, ${null})
+      ON CONFLICT (spotify_track_uri) DO UPDATE
+        SET title = EXCLUDED.title, artists = EXCLUDED.artists
+    `;
+    await sql`
+      INSERT INTO ratings (user_id, spotify_track_uri, rating_stars)
+      VALUES (${userId}, ${uri}, ${3})
+    `;
+  }
+}
+
+export async function cleanupManyRated(workerIndex: number, count: number): Promise<void> {
+  const sql = getDb();
+  await sql`DELETE FROM tracks WHERE spotify_track_uri = ANY(${bulkTrackUris(workerIndex, count)})`;
+}
+
 /**
  * Seeds a fixed library for the per-worker user: tracks (shared table, namespaced
  * URIs), ratings + labels + track_labels (user-scoped, cascade on user delete).

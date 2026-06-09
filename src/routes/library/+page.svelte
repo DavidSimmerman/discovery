@@ -52,7 +52,19 @@
     listens: 'Most listened',
   };
 
+  // How many rows to request per page; the list lazy-loads the next page as the
+  // user scrolls. Mirrors LIBRARY_PAGE_SIZE on the server.
+  const PAGE_SIZE = 50;
+
   let rows = $state<Row[]>([]);
+  // True (uncapped) number of rows matching the current tab + filters, from the
+  // server. Drives the header count and tells us when to stop lazy-loading.
+  let total = $state(0);
+  let loadingMore = $state(false);
+  let sentinel = $state<HTMLDivElement | null>(null);
+  // Bumped on every reset (loadSongs); an in-flight loadMore whose generation no
+  // longer matches discards its result instead of appending stale rows.
+  let reqGen = 0;
   let artistRows = $state<ArtistAggRow[]>([]);
   // Spotify top artists (most-listened order) — a separate dataset from the
   // rated-library aggregates above, loaded only when the "Most listened" sort
@@ -112,10 +124,21 @@
   let topArtistsLoaded = $state(false);
 
   const visibleRows = $derived.by(() => {
+    // The library listing is already tab-filtered + paginated server-side, so its
+    // rows render as-is. Only "Most listened" (a fully-loaded ≤50 snapshot that
+    // ignores the tab server-side) is filtered here.
+    if (songSort !== 'listens') return rows;
     if (tab === 'rated') return rows.filter((r) => r.rating != null && r.rating > 0);
     if (tab === 'labeled') return rows.filter((r) => r.labels.length > 0);
     return rows;
   });
+
+  // Header count: the true server total for the paginated library; for the fixed
+  // "Most listened" snapshot it's the (client-tab-filtered) loaded count.
+  const songCount = $derived(songSort === 'listens' ? visibleRows.length : total);
+
+  // More pages to lazy-load? Never for the non-paginated "Most listened" view.
+  const hasMore = $derived(songSort !== 'listens' && rows.length < total);
 
   const sortedArtists = $derived.by(() => {
     // "Most listened" comes from the server already in Spotify rank order.
@@ -156,24 +179,54 @@
   }
 
   async function getCurrentFilterUris(): Promise<readonly string[]> {
-    return visibleRows.map((r) => r.uri);
+    // "Most listened" is fully loaded (≤50) — shuffle what's on screen.
+    if (songSort === 'listens') return visibleRows.map((r) => r.uri);
+    // Otherwise fetch every matching uri so shuffle covers the whole filtered
+    // library, not just the pages scrolled into view. Falls back to the loaded
+    // rows if the request fails.
+    try {
+      const params = buildParams();
+      params.set('uris', '1');
+      const res = await fetch(`/api/library?${params.toString()}`);
+      if (!res.ok) return visibleRows.map((r) => r.uri);
+      const data = await res.json();
+      return (data.uris ?? []) as string[];
+    } catch {
+      return visibleRows.map((r) => r.uri);
+    }
   }
 
-  // Cancel any in-flight songs fetch so a faster, newer request can't be
-  // overwritten by a slow earlier one (e.g. mount + immediate filter change).
-  let songsAbort: AbortController | null = null;
-
-  async function loadSongs() {
-    songsAbort?.abort();
-    const ac = new AbortController();
-    songsAbort = ac;
-    loading = true;
+  // Query string shared by the page fetch, the lazy-load fetch and the shuffle
+  // uri fetch. Omits the tab for "Most listened" (which ignores it server-side).
+  function buildParams(): URLSearchParams {
     const params = new URLSearchParams();
     const trimmed = search.trim();
     if (trimmed !== '') params.set('search', trimmed);
     if (minRating !== null) params.set('minRating', String(minRating));
     if (activeLabel !== null) params.set('label', activeLabel);
     if (songSort !== 'recency') params.set('sort', songSort);
+    if (tab !== 'all' && songSort !== 'listens') params.set('tab', tab);
+    return params;
+  }
+
+  // Cancel any in-flight songs fetch so a faster, newer request can't be
+  // overwritten by a slow earlier one (e.g. mount + immediate filter change).
+  let songsAbort: AbortController | null = null;
+
+  // Reset to page 1. Aborts any in-flight fetch and bumps reqGen so a racing
+  // loadMore discards its result.
+  async function loadSongs() {
+    const gen = ++reqGen;
+    songsAbort?.abort();
+    const ac = new AbortController();
+    songsAbort = ac;
+    loading = true;
+    loadingMore = false;
+    const params = buildParams();
+    // Page 1. Explicit so the server paginates (its no-param default is the
+    // larger back-compat cap used by non-paginating callers). "Most listened"
+    // ignores paging — it's a fixed ≤50 snapshot — so don't bother sending it.
+    if (songSort !== 'listens') params.set('limit', String(PAGE_SIZE));
 
     try {
       const qs = params.toString();
@@ -183,7 +236,9 @@
         return;
       }
       const data = await res.json();
+      if (gen !== reqGen) return; // a newer reset superseded us
       rows = data.rows ?? [];
+      total = typeof data.total === 'number' ? data.total : rows.length;
       facets = data.facets ?? { total: 0, topLabels: [] };
       error = null;
     } catch (e) {
@@ -195,6 +250,34 @@
         hasLoaded = true;
         songsAbort = null;
       }
+    }
+  }
+
+  // Append the next page. Guarded so only one runs at a time and never during a
+  // reset; a reset that lands mid-flight (reqGen advances) discards the result.
+  async function loadMore() {
+    if (loading || loadingMore || !hasMore) return;
+    const gen = reqGen;
+    const ac = new AbortController();
+    songsAbort = ac;
+    loadingMore = true;
+    const params = buildParams();
+    params.set('offset', String(rows.length));
+    params.set('limit', String(PAGE_SIZE));
+
+    try {
+      const res = await fetch(`/api/library?${params.toString()}`, { signal: ac.signal });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (gen !== reqGen) return; // dataset changed underneath us → discard
+      rows = [...rows, ...(data.rows ?? [])];
+      if (typeof data.total === 'number') total = data.total;
+      error = null;
+    } catch (e) {
+      if ((e as { name?: string })?.name === 'AbortError') return;
+    } finally {
+      loadingMore = false;
+      if (songsAbort === ac) songsAbort = null;
     }
   }
 
@@ -272,7 +355,12 @@
   }
 
   function setTab(next: Tab) {
+    if (tab === next) return;
     tab = next;
+    // The library listing is tab-filtered + paginated server-side, so a tab
+    // change is a fresh page-1 fetch. "Most listened" filters client-side
+    // (visibleRows reacts on its own), so it needs no refetch.
+    if (songSort !== 'listens') void loadSongs();
   }
 
   function setView(next: View) {
@@ -308,6 +396,22 @@
       if (searchTimer !== null) clearTimeout(searchTimer);
     };
   });
+
+  // Lazy-load the next page when the sentinel below the list scrolls into view.
+  // Re-runs whenever `sentinel` mounts/unmounts (it only renders while hasMore).
+  // rootMargin preloads a page before the user actually hits the bottom.
+  $effect(() => {
+    const el = sentinel;
+    if (!el) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) void loadMore();
+      },
+      { rootMargin: '600px' },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  });
 </script>
 
 
@@ -316,7 +420,7 @@
     <h1 class="text-2xl font-extrabold">
       Your Library
       <span class="text-sm font-normal text-white/40">
-        {view === 'songs' ? visibleRows.length : visibleArtists.length}
+        {view === 'songs' ? songCount : visibleArtists.length}
       </span>
     </h1>
     {#if view === 'songs'}
@@ -532,6 +636,13 @@
           <LibraryRow {row} rank={row.rank ?? null} onclick={onRowClick} isPlaying={playback.state.track?.uri === row.uri} />
         {/each}
       </div>
+      {#if hasMore}
+        <!-- Sentinel: when it scrolls near the viewport, the next page loads. -->
+        <div bind:this={sentinel} class="h-px w-full" aria-hidden="true"></div>
+        <div class="flex justify-center py-4 text-xs text-white/40" aria-live="polite">
+          {#if loadingMore}Loading more…{/if}
+        </div>
+      {/if}
     {/if}
   {:else}
     {#if artistSort === 'listens' ? topArtistsLoading && !topArtistsLoaded : artistsLoading && !artistsLoaded}

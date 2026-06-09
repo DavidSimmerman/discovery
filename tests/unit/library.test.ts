@@ -3,11 +3,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // --- mocks (hoisted so the vi.mock factory can reference them) --------------
 const h = vi.hoisted(() => ({
   listLibrary: vi.fn(),
+  listLibraryUris: vi.fn(),
   libraryFacets: vi.fn(),
 }));
 
 vi.mock('$lib/server/library', () => ({
   listLibrary: h.listLibrary,
+  listLibraryUris: h.listLibraryUris,
   libraryFacets: h.libraryFacets,
 }));
 
@@ -27,7 +29,8 @@ function getEvent(opts: { user?: { id: string }; query?: Record<string, string> 
 
 beforeEach(() => {
   vi.clearAllMocks();
-  h.listLibrary.mockResolvedValue([{ id: 'row-1' }]);
+  h.listLibrary.mockResolvedValue({ rows: [{ id: 'row-1' }], total: 1 });
+  h.listLibraryUris.mockResolvedValue(['spotify:track:a', 'spotify:track:b']);
   h.libraryFacets.mockResolvedValue({ labels: [] });
 });
 
@@ -37,12 +40,13 @@ describe('GET /api/library', () => {
     expect(h.listLibrary).not.toHaveBeenCalled();
   });
 
-  it('no params → 200, body { rows, facets }; helpers wired with empty opts', async () => {
+  it('no params → 200, body { rows, total, facets }; helpers wired with empty opts', async () => {
     const res = await GET(getEvent({ user: USER }));
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body).toEqual({ rows: [{ id: 'row-1' }], facets: { labels: [] } });
-    // Endpoint only assigns present filters, so opts is exactly {} when no params.
+    expect(body).toEqual({ rows: [{ id: 'row-1' }], total: 1, facets: { labels: [] } });
+    // Endpoint only assigns present filters/paging, so opts is exactly {} when no
+    // params (listLibrary applies its own page-size/offset defaults).
     expect(h.listLibrary).toHaveBeenCalledWith(USER_ID, {});
     expect(h.libraryFacets).toHaveBeenCalledWith(USER_ID);
   });
@@ -136,5 +140,58 @@ describe('GET /api/library', () => {
   it('?artist= (empty) → treated as absent', async () => {
     await GET(getEvent({ user: USER, query: { artist: '' } }));
     expect(h.listLibrary).toHaveBeenCalledWith(USER_ID, {});
+  });
+
+  it.each(['rated', 'labeled'])('?tab=%s → opts.tab %s', async (t) => {
+    await GET(getEvent({ user: USER, query: { tab: t } }));
+    expect(h.listLibrary).toHaveBeenCalledWith(USER_ID, expect.objectContaining({ tab: t }));
+  });
+
+  it('?tab=all → treated as absent (no tab constraint)', async () => {
+    await GET(getEvent({ user: USER, query: { tab: 'all' } }));
+    expect(h.listLibrary).toHaveBeenCalledWith(USER_ID, {});
+  });
+
+  it('?tab=bogus → 400; listLibrary not called', async () => {
+    await expect(
+      GET(getEvent({ user: USER, query: { tab: 'bogus' } })),
+    ).rejects.toMatchObject({ status: 400 });
+    expect(h.listLibrary).not.toHaveBeenCalled();
+  });
+
+  it('?limit=25&offset=50 → opts.limit 25, opts.offset 50', async () => {
+    await GET(getEvent({ user: USER, query: { limit: '25', offset: '50' } }));
+    expect(h.listLibrary).toHaveBeenCalledWith(
+      USER_ID,
+      expect.objectContaining({ limit: 25, offset: 50 }),
+    );
+  });
+
+  it.each(['0', '101', 'abc', '2.5'])('?limit=%s → 400; listLibrary not called', async (v) => {
+    await expect(
+      GET(getEvent({ user: USER, query: { limit: v } })),
+    ).rejects.toMatchObject({ status: 400 });
+    expect(h.listLibrary).not.toHaveBeenCalled();
+  });
+
+  it.each(['-1', 'abc', '2.5'])('?offset=%s → 400; listLibrary not called', async (v) => {
+    await expect(
+      GET(getEvent({ user: USER, query: { offset: v } })),
+    ).rejects.toMatchObject({ status: 400 });
+    expect(h.listLibrary).not.toHaveBeenCalled();
+  });
+
+  it('?uris=1 → returns { uris } from listLibraryUris; listLibrary not called', async () => {
+    const res = await GET(
+      getEvent({ user: USER, query: { uris: '1', tab: 'rated', search: 'foo' } }),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toEqual({ uris: ['spotify:track:a', 'spotify:track:b'] });
+    expect(h.listLibraryUris).toHaveBeenCalledWith(
+      USER_ID,
+      expect.objectContaining({ tab: 'rated', search: 'foo' }),
+    );
+    expect(h.listLibrary).not.toHaveBeenCalled();
   });
 });

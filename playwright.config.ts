@@ -1,11 +1,16 @@
 import { defineConfig, devices } from '@playwright/test';
 
+// Port is overridable (E2E_PORT) so a git-worktree checkout can run its own
+// isolated dev server instead of reusing whatever is already on the default port.
+const PORT = process.env.E2E_PORT ?? '5173';
+const BASE_URL = `http://127.0.0.1:${PORT}`;
+
 export default defineConfig({
   testDir: 'tests',
-  use: { baseURL: 'http://127.0.0.1:5173' },
+  use: { baseURL: BASE_URL },
   webServer: {
-    command: 'pnpm exec vite dev --host 127.0.0.1',
-    url: 'http://127.0.0.1:5173',
+    command: `pnpm exec vite dev --host 127.0.0.1 --port ${PORT} --strictPort`,
+    url: BASE_URL,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
   },

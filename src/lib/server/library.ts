@@ -13,8 +13,22 @@ import { tracks as tracksTable } from '$lib/server/db/schema';
 // the library) rather than the rated/labeled library.
 export type LibrarySort = 'recency' | 'rating' | 'name' | 'artist' | 'top' | 'listens';
 
+// All / Rated / Labeled. Applied server-side (not just client filtering) so the
+// listing can be paginated and the header count reflects the true tab total.
+export type LibraryTab = 'all' | 'rated' | 'labeled';
+
 // Spotify caps /me/top/* at 50 and we never store more than that.
 const TOP_LISTENS_LIMIT = 50;
+
+// Default page size for the paginated library listing. The client lazy-loads
+// successive pages of this size as the user scrolls.
+export const LIBRARY_PAGE_SIZE = 50;
+
+// Fallback cap when a caller doesn't request an explicit `limit`. The library
+// page paginates with an explicit LIBRARY_PAGE_SIZE; other callers (the artist
+// page, the now-playing artist panel) fetch once without paging, so this keeps
+// their original behavior rather than silently truncating them to one page.
+const DEFAULT_LIBRARY_LIMIT = 500;
 
 // DB approach: src/lib/server/db/index.ts exports only the Drizzle `db` (the raw
 // postgres-js client is module-private), so these UNION/aggregate queries are
@@ -42,20 +56,22 @@ export type LibraryRow = {
   rank?: number;
 };
 
-export async function listLibrary(
-  userId: string,
-  opts: {
-    search?: string;
-    minRating?: number;
-    label?: string;
-    artist?: string;
-    sort?: LibrarySort;
-  },
-): Promise<LibraryRow[]> {
-  const { search, minRating, label, artist, sort = 'recency' } = opts;
+type LibraryFilterOpts = {
+  search?: string;
+  minRating?: number;
+  label?: string;
+  artist?: string;
+  tab?: LibraryTab;
+};
 
-  // Optional filters, AND-combined. Each is appended only when present so that
-  // absent filters add no constraint. All values are bound parameters.
+// Builds the AND-combined WHERE fragment shared by the listing, its total-count,
+// and the uris-only query. Each filter is appended only when present so absent
+// filters add no constraint. References the `base` (uri), `t` (tracks) and `r`
+// (ratings) aliases, which every consumer query exposes. All values are bound
+// parameters — never string-concatenated into the SQL text.
+function libraryFilters(userId: string, opts: LibraryFilterOpts) {
+  const { search, minRating, label, artist, tab } = opts;
+
   const minRatingFilter =
     minRating !== undefined ? sql` AND r.rating_stars >= ${minRating}` : sql``;
 
@@ -95,6 +111,33 @@ export async function listLibrary(
           )
         )`
       : sql``;
+
+  // Tab filter. 'rated' = has a star rating; 'labeled' = carries at least one
+  // label. 'all' (or undefined) adds nothing.
+  const tabFilter =
+    tab === 'rated'
+      ? sql` AND r.rating_stars IS NOT NULL`
+      : tab === 'labeled'
+        ? sql` AND EXISTS (
+            SELECT 1 FROM track_labels tlt
+            WHERE tlt.user_id = ${userId}
+              AND tlt.spotify_track_uri = base.uri
+          )`
+        : sql``;
+
+  return sql`${minRatingFilter}${labelFilter}${artistFilter}${searchFilter}${tabFilter}`;
+}
+
+export async function listLibrary(
+  userId: string,
+  opts: LibraryFilterOpts & {
+    sort?: LibrarySort;
+    limit?: number;
+    offset?: number;
+  },
+): Promise<{ rows: LibraryRow[]; total: number }> {
+  const { sort = 'recency', limit = DEFAULT_LIBRARY_LIMIT, offset = 0 } = opts;
+  const filters = libraryFilters(userId, opts);
 
   // recency = GREATEST(rating's rated_at, max applied_at across the track's labels),
   // each COALESCED to 'epoch' so a track present via only one of ratings/labels
@@ -149,27 +192,73 @@ export async function listLibrary(
     -- Joined so the rating sort can tiebreak by top-track rank without exposing
     -- the value to the client. NULL when the track isn't in the user's top 50.
     LEFT JOIN user_top_tracks utt ON utt.spotify_track_uri = base.uri AND utt.user_id = ${userId}
-    WHERE TRUE${minRatingFilter}${labelFilter}${artistFilter}${searchFilter}
+    WHERE TRUE${filters}
     GROUP BY base.uri, t.title, t.artists, t.album_art_url, r.rating_stars, r.rated_at, utt.rank,
              t.song_family_id, t.canonical_title, t.primary_artist_id, t.version_type, t.album
     ${orderBy(sort)}
-    LIMIT 500
+    LIMIT ${limit} OFFSET ${offset}
   `);
 
-  return rows.map((row) => ({
-    uri: row.uri,
-    title: row.title,
-    artists: row.artists ?? [],
-    albumArtUrl: row.album_art_url,
-    rating: row.rating,
-    labels: row.labels,
-    songFamilyId: row.song_family_id,
-    canonicalTitle: row.canonical_title,
-    primaryArtistId: row.primary_artist_id,
-    versionType: row.version_type,
-    album: row.album,
-    plays: row.plays_count ?? 0,
-  }));
+  // Total matching the same filters (uncapped) so the client can show a true
+  // count and know when to stop lazy-loading. base.uri is unique (UNION) and the
+  // tracks/ratings joins are 1:1, so count(*) over them is the distinct-uri count
+  // — no GROUP BY needed. The label-aggregation join is omitted here (filters use
+  // EXISTS subqueries, not that join) to keep the count from multiplying rows.
+  const totalRows = await db.execute<{ total: number }>(sql`
+    WITH base AS (
+      SELECT spotify_track_uri AS uri FROM ratings WHERE user_id = ${userId}
+      UNION
+      SELECT spotify_track_uri AS uri FROM track_labels WHERE user_id = ${userId}
+    )
+    SELECT COUNT(*)::int AS total
+    FROM base
+    LEFT JOIN tracks t ON t.spotify_track_uri = base.uri
+    LEFT JOIN ratings r ON r.spotify_track_uri = base.uri AND r.user_id = ${userId}
+    WHERE TRUE${filters}
+  `);
+
+  return {
+    rows: rows.map((row) => ({
+      uri: row.uri,
+      title: row.title,
+      artists: row.artists ?? [],
+      albumArtUrl: row.album_art_url,
+      rating: row.rating,
+      labels: row.labels,
+      songFamilyId: row.song_family_id,
+      canonicalTitle: row.canonical_title,
+      primaryArtistId: row.primary_artist_id,
+      versionType: row.version_type,
+      album: row.album,
+      plays: row.plays_count ?? 0,
+    })),
+    total: totalRows[0]?.total ?? 0,
+  };
+}
+
+/**
+ * All track URIs matching the given filters (tab + search + rating + label),
+ * uncapped and unordered. Backs the "Shuffle whole filtered library" action so
+ * it covers the entire set, not just the pages the user has scrolled into view.
+ */
+export async function listLibraryUris(
+  userId: string,
+  opts: LibraryFilterOpts,
+): Promise<string[]> {
+  const filters = libraryFilters(userId, opts);
+  const rows = await db.execute<{ uri: string }>(sql`
+    WITH base AS (
+      SELECT spotify_track_uri AS uri FROM ratings WHERE user_id = ${userId}
+      UNION
+      SELECT spotify_track_uri AS uri FROM track_labels WHERE user_id = ${userId}
+    )
+    SELECT base.uri AS uri
+    FROM base
+    LEFT JOIN tracks t ON t.spotify_track_uri = base.uri
+    LEFT JOIN ratings r ON r.spotify_track_uri = base.uri AND r.user_id = ${userId}
+    WHERE TRUE${filters}
+  `);
+  return rows.map((row) => row.uri);
 }
 
 export async function getLibraryTrack(
@@ -388,24 +477,28 @@ export async function listTopTracks(
 }
 
 function orderBy(sort: LibrarySort) {
+  // Every branch ends with `base.uri ASC` — a unique final key. Without it, rows
+  // that tie on the visible sort keys (e.g. equal rating + same rated_at, common
+  // after a bulk import) have an undefined relative order, which makes OFFSET
+  // pagination drop or duplicate rows across page boundaries.
   switch (sort) {
     case 'rating':
       // Tiebreak same-rated tracks by top-track rank (lower rank = more played).
       // NULLs (not in top 50) sort last so unranked tracks fall below ranked ones.
-      return sql`ORDER BY r.rating_stars DESC NULLS LAST, utt.rank ASC NULLS LAST, recency DESC`;
+      return sql`ORDER BY r.rating_stars DESC NULLS LAST, utt.rank ASC NULLS LAST, recency DESC, base.uri ASC`;
     case 'name':
-      return sql`ORDER BY lower(t.title) ASC NULLS LAST, recency DESC`;
+      return sql`ORDER BY lower(t.title) ASC NULLS LAST, recency DESC, base.uri ASC`;
     case 'artist':
-      return sql`ORDER BY lower(t.artists[1]) ASC NULLS LAST, r.rating_stars DESC NULLS LAST, lower(t.title) ASC NULLS LAST`;
+      return sql`ORDER BY lower(t.artists[1]) ASC NULLS LAST, r.rating_stars DESC NULLS LAST, lower(t.title) ASC NULLS LAST, base.uri ASC`;
     case 'top':
       // "Top tracks" — rating first, then how often the user has actually played
       // it. Used by the Artist tab on now-playing to surface the user's most-loved,
       // most-spun songs by the current artist. Refers to plays_count by alias from
       // the outer SELECT (Postgres allows output-column references in ORDER BY).
-      return sql`ORDER BY r.rating_stars DESC NULLS LAST, plays_count DESC, recency DESC`;
+      return sql`ORDER BY r.rating_stars DESC NULLS LAST, plays_count DESC, recency DESC, base.uri ASC`;
     case 'recency':
     default:
-      return sql`ORDER BY recency DESC`;
+      return sql`ORDER BY recency DESC, base.uri ASC`;
   }
 }
 

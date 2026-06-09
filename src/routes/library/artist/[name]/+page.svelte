@@ -42,6 +42,10 @@
     rating: number | null;
   };
 
+  // Server-computed artist stats (same numbers as the now-playing Artist tab):
+  // average rating, composite "artist rating", and rank among all rated artists.
+  type ArtistStats = { avg: number; rating: number; rank: number; total: number; count: number };
+
   const artistName = $derived(page.params.name ?? '');
 
   let rows = $state<Row[]>([]);
@@ -54,6 +58,7 @@
   // library list so the rated songs appear instantly and this fills in
   // underneath without shifting them.
   let topPopular = $state<PopularTrack[]>([]);
+  let artistStats = $state<ArtistStats | null>(null);
   let discoveryLoading = $state(true);
 
   const SORT_LABEL: Record<Sort, string> = {
@@ -170,6 +175,7 @@
       if (!res.ok) return;
       const data = await res.json();
       topPopular = data.topPopular ?? [];
+      artistStats = data.stats ?? null;
     } catch {
       // Best-effort discovery — leave the section empty on failure.
     } finally {
@@ -226,22 +232,33 @@
     <div class="min-w-0 flex-1">
       <h1 class="truncate text-xl font-extrabold">{artistName}</h1>
       <p class="text-xs text-white/50">{stats.total} {stats.total === 1 ? 'song' : 'songs'} rated</p>
-      {#if stats.total > 0}
-        <div class="mt-1 flex items-center gap-2 text-xs">
-          <span class="flex items-center gap-0.5 font-semibold text-spotify-green">
-            <Star class="size-3 fill-current" />
-            {stats.avg.toFixed(1)} avg
-          </span>
-          {#if stats.fiveStars > 0}
-            <span class="text-white/40">· {stats.fiveStars} five-star</span>
-          {/if}
-        </div>
+      {#if stats.total > 0 && stats.fiveStars > 0}
+        <p class="mt-0.5 text-xs text-white/40">{stats.fiveStars} five-star</p>
       {/if}
     </div>
     <PremiumGate {product}>
       <ShuffleButton store={playback} getUris={getCurrentFilterUris} label="Shuffle" />
     </PremiumGate>
   </header>
+
+  <!-- Artist stats — avg rating · composite "artist rating" · rank among all
+       rated artists. Same numbers (and layout) as the now-playing Artist tab. -->
+  {#if artistStats}
+    <div class="grid grid-cols-3 gap-2 rounded-xl bg-white/[0.04] p-2 text-center" data-testid="artist-stats">
+      <div>
+        <div class="text-sm font-bold tabular-nums text-spotify-green">{artistStats.avg.toFixed(1)}</div>
+        <div class="text-[10px] text-white/45">avg rating</div>
+      </div>
+      <div>
+        <div class="text-sm font-bold tabular-nums text-spotify-green">{artistStats.rating}</div>
+        <div class="text-[10px] text-white/45">artist rating</div>
+      </div>
+      <div>
+        <div class="text-sm font-bold tabular-nums">#{artistStats.rank}</div>
+        <div class="text-[10px] text-white/45">of {artistStats.total} artists</div>
+      </div>
+    </div>
+  {/if}
 
   <div class="flex justify-end">
     <div class="relative">

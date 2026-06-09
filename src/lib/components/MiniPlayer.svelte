@@ -11,7 +11,11 @@
 
   const shown = $derived(store.isActive && currentRoute !== '/now-playing');
   // Sit above the bottom nav (h-12 + bottom-4 + gap) when it's visible.
-  const bottomClass = $derived(navVisible ? 'bottom-20' : 'bottom-4');
+  const bottomClass = $derived(
+    navVisible
+      ? 'bottom-[calc(5rem+env(safe-area-inset-bottom))]'
+      : 'bottom-[calc(1rem+env(safe-area-inset-bottom))]',
+  );
 
   const ratingLabel = $derived(
     store.currentRating != null && store.currentRating > 0

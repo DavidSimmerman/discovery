@@ -88,7 +88,7 @@
   );
 </script>
 
-<main class="relative isolate flex min-h-screen flex-col items-center justify-center gap-6 p-6 pb-32">
+<main class="relative isolate flex min-h-screen flex-col items-center justify-center gap-6 p-6 pt-[calc(1.5rem+env(safe-area-inset-top))] pb-32">
   {#if backdropUrl}
     <div aria-hidden="true" class="pointer-events-none absolute inset-0 -z-10 overflow-hidden">
       <div

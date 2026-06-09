@@ -70,7 +70,7 @@
   }
 </script>
 
-<main class="relative isolate mx-auto flex min-h-screen w-full max-w-md flex-col gap-5 p-4 pb-32">
+<main class="relative isolate mx-auto flex min-h-screen w-full max-w-md flex-col gap-5 p-4 pt-[calc(1rem+env(safe-area-inset-top))] pb-32">
   {#if data.track.albumArtUrl}
     <div aria-hidden="true" class="pointer-events-none absolute inset-0 -z-10 overflow-hidden">
       <div

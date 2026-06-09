@@ -415,7 +415,7 @@
 </script>
 
 
-<main class="mx-auto flex min-h-screen w-full max-w-md flex-col gap-3 p-4 pb-32">
+<main class="mx-auto flex min-h-screen w-full max-w-md flex-col gap-3 p-4 pt-[calc(1rem+env(safe-area-inset-top))] pb-32">
   <header class="flex items-baseline justify-between gap-3">
     <h1 class="text-2xl font-extrabold">
       Your Library

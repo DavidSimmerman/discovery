@@ -70,7 +70,17 @@
   }
 </script>
 
-<main class="mx-auto flex min-h-screen w-full max-w-md flex-col gap-5 p-4 pb-32">
+<main class="relative isolate mx-auto flex min-h-screen w-full max-w-md flex-col gap-5 p-4 pb-32">
+  {#if data.track.albumArtUrl}
+    <div aria-hidden="true" class="pointer-events-none absolute inset-0 -z-10 overflow-hidden">
+      <div
+        class="absolute inset-0 scale-110 bg-cover bg-center opacity-65 blur-3xl"
+        style="background-image: url({data.track.albumArtUrl});"
+      ></div>
+      <div class="absolute inset-0 bg-black/55"></div>
+    </div>
+  {/if}
+
   <button
     type="button"
     onclick={() => goto('/library')}

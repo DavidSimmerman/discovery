@@ -10,11 +10,23 @@
   };
 
   let { artists, open, onpick, onclose }: Props = $props();
+
+  /** Move the node to <body> so it escapes any ancestor stacking context (e.g. the
+   *  now-playing <main> uses `isolate`, which would otherwise trap us under BottomNav). */
+  function portal(node: HTMLElement) {
+    document.body.appendChild(node);
+    return {
+      destroy() {
+        node.remove();
+      },
+    };
+  }
 </script>
 
 {#if open}
   <!-- Backdrop -->
   <div
+    use:portal
     class="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm"
     transition:fade={{ duration: 150 }}
     onclick={onclose}
@@ -27,6 +39,7 @@
     aria-modal="true"
     aria-label="Choose an artist"
     data-testid="artist-picker-sheet"
+    use:portal
     transition:fly={{ y: 240, duration: 220 }}
     class="fixed inset-x-0 bottom-0 z-[70] mx-auto w-full max-w-md rounded-t-2xl border-t border-white/10 bg-neutral-900/95 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl shadow-black/80 backdrop-blur"
   >

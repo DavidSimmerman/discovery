@@ -5,6 +5,7 @@
   import { createPlaybackStore, setPlaybackStore } from '$lib/playback/player.svelte';
   import MiniPlayer from '$lib/components/MiniPlayer.svelte';
   import BottomNav from '$lib/components/BottomNav.svelte';
+  import { historyBadge } from '$lib/history/badge.svelte';
 
   let { children, data } = $props();
 
@@ -20,6 +21,8 @@
     if (!data.user) return;
     playback.init();
     void fetch('/api/me/top-lists/refresh', { method: 'POST' }).catch(() => {});
+    // Populate the History nav badge (unrated recent plays) once on app load.
+    void historyBadge.refresh();
     return () => playback.destroy();
   });
 
@@ -29,7 +32,9 @@
       (page.url.pathname === '/now-playing' ||
         page.url.pathname.startsWith('/now-playing/') ||
         page.url.pathname === '/library' ||
-        page.url.pathname.startsWith('/library/')),
+        page.url.pathname.startsWith('/library/') ||
+        page.url.pathname === '/history' ||
+        page.url.pathname.startsWith('/history/')),
   );
 </script>
 

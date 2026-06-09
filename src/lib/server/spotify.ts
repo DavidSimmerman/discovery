@@ -220,6 +220,37 @@ export async function fetchMyTopTracks(
   }));
 }
 
+export interface RecentlyPlayedItem {
+  track: SpotifyTrack;
+  played_at: string; // ISO 8601 timestamp of when playback ended
+}
+
+// The user's recently-played tracks (GET /me/player/recently-played). Spotify
+// caps `limit` at 50 and only returns a rolling window of the most recent plays
+// (tracks played for >30s). `afterMs` is a Unix ms cursor — only plays strictly
+// after it are returned — so we pass `now - windowMs` to bound the history.
+// Returns full track objects (album art + ISRC included) paired with played_at;
+// non-track items (local files / podcasts) are filtered out.
+export async function fetchRecentlyPlayed(
+  accessToken: string,
+  afterMs?: number,
+  limit = 50,
+): Promise<RecentlyPlayedItem[]> {
+  const params = new URLSearchParams({ limit: String(Math.max(1, Math.min(50, limit))) });
+  if (afterMs !== undefined) params.set('after', String(Math.floor(afterMs)));
+  const res = await fetch(
+    `https://api.spotify.com/v1/me/player/recently-played?${params.toString()}`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+  if (!res.ok) {
+    throw new SpotifyApiError(res.status, `Spotify recently-played failed: ${res.status}`);
+  }
+  const json = await res.json();
+  return ((json.items ?? []) as RecentlyPlayedItem[]).filter(
+    (i) => typeof i?.track?.uri === 'string' && i.track.uri.startsWith('spotify:track:'),
+  );
+}
+
 // Resolve a Last.fm (artist, title) pair to a Spotify URI via /v1/search.
 // Returns null when nothing plausible matches.
 export async function searchTrack(

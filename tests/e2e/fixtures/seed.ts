@@ -332,6 +332,50 @@ export async function cleanupLibrary(workerIndex: number): Promise<void> {
   await sql`DELETE FROM tracks WHERE spotify_track_uri = ANY(${libraryTrackUris(workerIndex)})`;
 }
 
+// --- History seed (recent plays) -------------------------------------------
+// Seeds the local `plays` log so the History view can be exercised without a
+// Spotify token (the view degrades to in-app plays when none is present). Adds
+// one UNRATED track (catalog row, no rating) plus plays for it, and a play for
+// an already-rated library track — so the Unrated filter and All filter differ.
+export function historyUnratedTrackUri(workerIndex: number): string {
+  const id = `HistUnrated${String(workerIndex).padStart(4, '0')}`.padEnd(22, '0').slice(0, 22);
+  return `spotify:track:${id}`;
+}
+export const HISTORY_UNRATED_TITLE = 'Unrated Recent Jam';
+
+/** Requires seedLibrary first (for the rated track). Returns the seeded URIs. */
+export async function seedHistoryPlays(
+  userId: string,
+  workerIndex: number,
+): Promise<{ unratedUri: string; ratedUri: string }> {
+  const sql = getDb();
+  const unratedUri = historyUnratedTrackUri(workerIndex);
+  const ratedUri = trackUri(workerIndex, 0); // "Midnight City" (rating 5 from seedLibrary)
+
+  await sql`
+    INSERT INTO tracks (spotify_track_uri, title, artists, album_art_url)
+    VALUES (${unratedUri}, ${HISTORY_UNRATED_TITLE}, ${['Fresh Artist']}, ${null})
+    ON CONFLICT (spotify_track_uri) DO UPDATE
+      SET title = EXCLUDED.title, artists = EXCLUDED.artists
+  `;
+
+  // Recent plays, all inside the 7-day window.
+  await sql`INSERT INTO plays (user_id, spotify_track_uri, played_at, source)
+            VALUES (${userId}, ${unratedUri}, now() - interval '10 minutes', 'shuffle')`;
+  await sql`INSERT INTO plays (user_id, spotify_track_uri, played_at, source)
+            VALUES (${userId}, ${unratedUri}, now() - interval '2 hours', 'shuffle')`;
+  await sql`INSERT INTO plays (user_id, spotify_track_uri, played_at, source)
+            VALUES (${userId}, ${ratedUri}, now() - interval '1 hour', 'manual')`;
+
+  return { unratedUri, ratedUri };
+}
+
+/** plays cascade on user delete; only the non-cascading unrated track needs cleanup. */
+export async function cleanupHistoryPlays(workerIndex: number): Promise<void> {
+  const sql = getDb();
+  await sql`DELETE FROM tracks WHERE spotify_track_uri = ${historyUnratedTrackUri(workerIndex)}`;
+}
+
 export async function closeSeedConnection(): Promise<void> {
   if (_sql) {
     await _sql.end({ timeout: 5 });

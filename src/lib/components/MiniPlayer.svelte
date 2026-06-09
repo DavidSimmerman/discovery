@@ -10,11 +10,13 @@
   }: { store: PlaybackStore; currentRoute: string; navVisible?: boolean } = $props();
 
   const shown = $derived(store.isActive && currentRoute !== '/now-playing');
-  // Sit above the bottom nav (h-12 + bottom-4 + gap) when it's visible.
+  // Track the nav's bottom offset (max(1rem, safe-area) — slight margin, or just
+  // above the home indicator). When the nav is visible, sit above it (nav h-12 +
+  // gap ≈ 3.75rem). When hidden, share the nav's resting offset.
   const bottomClass = $derived(
     navVisible
-      ? 'bottom-[calc(5rem+env(safe-area-inset-bottom))]'
-      : 'bottom-[calc(1rem+env(safe-area-inset-bottom))]',
+      ? 'bottom-[calc(max(1rem,env(safe-area-inset-bottom))+3.75rem)]'
+      : 'bottom-[max(1rem,env(safe-area-inset-bottom))]',
   );
 
   const ratingLabel = $derived(

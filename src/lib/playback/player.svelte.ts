@@ -307,6 +307,23 @@ export function createPlaybackStore(): PlaybackStore {
     } catch { return null; }
   }
 
+  // Spotify's real up-next queue (the tracks still queued from the context we
+  // pushed before the app closed). Used on resume to seed lastPushedUris with the
+  // ACTUAL remaining runway — the server timeline's `upcoming` refills past what
+  // was pushed, so it can't be trusted for the low-water re-push math.
+  async function fetchSpotifyQueueUris(): Promise<string[]> {
+    try {
+      const res = await fetch('/api/spotify/queue');
+      if (!res.ok) return [];
+      const j = (await res.json()) as { queue?: ({ uri: string | null } | null)[] };
+      return (j.queue ?? [])
+        .map((t) => t?.uri)
+        .filter((u): u is string => typeof u === 'string' && u.length > 0);
+    } catch {
+      return [];
+    }
+  }
+
   async function postTimelineAction(body: TimelineActionBody): Promise<Timeline | null> {
     try {
       const res = await fetch('/api/shuffle/timeline', {
@@ -506,13 +523,16 @@ export function createPlaybackStore(): PlaybackStore {
     } catch { /* private mode — resume just won't fire, which is fine */ }
   }
 
-  // Auto-resume car mode after a page reload. The store is reconstructed empty
-  // on every navigation; if Spotify is still on a track our timeline owns, take
-  // the session back over and RE-PUSH a fresh context (we can't know what
-  // Spotify still has queued from before the reload, so re-establish it — one
-  // re-seek on reload is acceptable). Gated on the auto-managed sampler marker
-  // (set by startSampler, cleared by playTrack/shuffle) so we only resume when
-  // the user's last action was actually a shuffle.
+  // Auto-resume car mode after a page reload / PWA reopen. The store is
+  // reconstructed empty on every navigation; if Spotify is still on a track our
+  // timeline owns, re-attach to the session WITHOUT re-pushing. Spotify is still
+  // playing the context we handed it before the close, so a re-push would only
+  // rebuild (reset) the live queue on every reopen — which is exactly what we
+  // must not do. Instead we sync the server cursor to whatever Spotify is on and
+  // reconstruct lastPushedUris from the timeline; the poll loop then follows
+  // native advances and re-pushes only when the queue genuinely runs low.
+  // Gated on the auto-managed sampler marker (set by startSampler, cleared by
+  // playTrack/shuffle) so we only resume when the user's last action was a shuffle.
   let resumeAttemptInflight: Promise<void> | null = null;
   async function tryResumeSampler(): Promise<void> {
     if (isSampling) return;
@@ -541,13 +561,21 @@ export function createPlaybackStore(): PlaybackStore {
           const gen = samplerGeneration;
           const synced = await postTimelineAction({ action: 'sync', uri: currentUri });
           if (gen !== samplerGeneration) return;
-          timeline = synced ?? tl;
-          // Only consider ourselves resumed once the re-push actually landed.
-          // If it fails, stop cleanly (which also clears the resume marker) so
-          // we don't sit in a half-active state thinking we own Spotify.
-          const ok = await pushContext(gen, state.position_ms);
+          const resumed = synced ?? tl;
+          if (!resumed.current) return;
+          timeline = resumed;
+          // Soft re-attach without re-pushing (no queue reset). Seed
+          // lastPushedUris from Spotify's REAL remaining queue so the low-water
+          // re-push fires at the right time — the timeline's `upcoming` refills
+          // past what was actually pushed, so it would over-estimate the runway
+          // and let Spotify run off the end. Fall back to the timeline's upcoming
+          // only when the queue read is unavailable. The poll loop's native-
+          // advance follow + low-water re-push take over from here.
+          const realQueue = await fetchSpotifyQueueUris();
           if (gen !== samplerGeneration) return;
-          if (!ok) { stopSampling(); return; }
+          const runway = realQueue.length > 0 ? realQueue : resumed.upcoming;
+          lastPushedUris = [resumed.current, ...runway].slice(0, MAX_CONTEXT);
+          contextSettleUntil = 0; // nothing pushed → nothing to settle
           isSampling = true;
         } finally {
           samplerBusy = false;

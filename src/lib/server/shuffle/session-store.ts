@@ -14,7 +14,8 @@
 import { db } from '$lib/server/db';
 import { plays, shuffleSessions } from '$lib/server/db/schema';
 import { and, desc, eq, sql } from 'drizzle-orm';
-import type { SamplerConfig, SessionState } from './sampler';
+import type { SessionState } from './sampler';
+import { normalizeSettings, type ShuffleSettings } from './config';
 import { emptyTimeline, type Timeline } from './timeline';
 
 // Drizzle's transaction callback parameter — pulled out so endpoint code can
@@ -88,18 +89,62 @@ export async function loadSessionState(
   };
 }
 
+// Persist sampler/timeline state. activeConfig is set on INSERT only (the
+// column is NOT NULL) — on update it's left alone, so a pick that loaded
+// settings before taking the lock can never clobber a settings save that
+// happened in between. Settings writes go through saveUserSettings only.
 export async function saveSessionState(
   tx: DbExec,
   userId: string,
   state: SessionState,
-  cfg: SamplerConfig,
+  settings: ShuffleSettings,
 ): Promise<void> {
   await tx
     .insert(shuffleSessions)
-    .values({ userId, activeConfig: cfg, state, updatedAt: sql`now()` })
+    .values({ userId, activeConfig: settings, state, updatedAt: sql`now()` })
     .onConflictDoUpdate({
       target: shuffleSessions.userId,
-      set: { state, activeConfig: cfg, updatedAt: sql`now()` },
+      set: { state, updatedAt: sql`now()` },
+    });
+}
+
+// The user's persisted shuffle settings (sources + sampler knobs), from
+// shuffleSessions.activeConfig. Older rows hold a bare SamplerConfig;
+// normalizeSettings folds every generation forward. Missing row → defaults.
+export async function loadUserSettings(
+  exec: Pick<DbExec, 'select'>,
+  userId: string,
+): Promise<ShuffleSettings> {
+  const rows = await exec
+    .select({ activeConfig: shuffleSessions.activeConfig })
+    .from(shuffleSessions)
+    .where(eq(shuffleSessions.userId, userId))
+    .limit(1);
+  return normalizeSettings(rows[0]?.activeConfig ?? null);
+}
+
+// Persist settings without touching sampler state — the settings UI saves
+// through this; only activeConfig changes. Creates the row when missing so a
+// user can configure sources before their first shuffle.
+export async function saveUserSettings(
+  tx: DbExec,
+  userId: string,
+  settings: ShuffleSettings,
+): Promise<void> {
+  await tx
+    .insert(shuffleSessions)
+    .values({
+      userId,
+      activeConfig: settings,
+      // Empty blob, not an empty SessionState: loadSessionState falls back to
+      // the plays table per missing field, so cooldowns survive a settings
+      // save that races the user's first shuffle.
+      state: {},
+      updatedAt: sql`now()`,
+    })
+    .onConflictDoUpdate({
+      target: shuffleSessions.userId,
+      set: { activeConfig: settings, updatedAt: sql`now()` },
     });
 }
 

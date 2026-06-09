@@ -19,8 +19,6 @@
 
 import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { ratings, tracks } from '$lib/server/db/schema';
-import { eq } from 'drizzle-orm';
 import {
   advance,
   back,
@@ -36,18 +34,21 @@ import {
 import {
   pickNext,
   recordPlay,
-  tierOf,
   type Candidate,
   type SamplerConfig,
   type SessionState,
 } from '$lib/server/shuffle/sampler';
+import { db } from '$lib/server/db';
+import { effectiveSamplerConfig, poolSides } from '$lib/server/shuffle/config';
+import { loadCandidates, prefetchPlaylists } from '$lib/server/shuffle/sources';
+import { getValidAccessToken } from '$lib/server/tokens';
 import {
   loadSessionState,
+  loadUserSettings,
   saveSessionState,
   timelineOf,
   withUserSessionLock,
   RING_CAP,
-  type DbExec,
 } from '$lib/server/shuffle/session-store';
 
 // Target queue depth. Car mode pushes [current, ...upcoming] as a real Spotify
@@ -59,50 +60,6 @@ const TARGET_DEPTH = 50;
 // spin forever. A handful of misses won't fill the queue; ~3× target is enough.
 const REFILL_MAX_ATTEMPTS = TARGET_DEPTH * 3;
 
-// Same default config as /api/shuffle/next. Worth deduplicating into a
-// constant when slice 6 (user-tunable configs) lands.
-const DEFAULT_CONFIG: SamplerConfig = {
-  mix: { ratedPct: 100, unratedPct: 0 },
-  tierWeights: { '1': 0, '2': 10, '3': 30, '4': 70, '5': 100, unrated: 20 },
-  filters: {},
-  gates: {
-    cooldownCount: { enabled: true, n: 50 },
-    cooldownTime: { enabled: true, hours: 6 },
-    dailyCap: { enabled: false, max: 2 },
-  },
-  recency: {
-    '5': { curve: 'log', halfLifePicks: 80 },
-    '4': { curve: 'exp', halfLifePicks: 40 },
-    '3': { curve: 'linear', halfLifePicks: 20 },
-    '2': { curve: 'linear', halfLifePicks: 10 },
-    '1': { curve: 'linear', halfLifePicks: 5 },
-    unrated: { curve: 'linear', halfLifePicks: 20 },
-  },
-};
-
-async function loadCandidates(tx: DbExec, userId: string): Promise<Candidate[]> {
-  const rows = await tx
-    .select({
-      uri: ratings.spotifyTrackUri,
-      rating: ratings.ratingStars,
-      primaryArtistId: tracks.primaryArtistId,
-      genres: tracks.genres,
-      versionType: tracks.versionType,
-    })
-    .from(ratings)
-    .leftJoin(tracks, eq(tracks.spotifyTrackUri, ratings.spotifyTrackUri))
-    .where(eq(ratings.userId, userId));
-
-  return rows.map((r) => ({
-    uri: r.uri,
-    tier: tierOf(r.rating),
-    rating: r.rating,
-    artistIds: r.primaryArtistId ? [r.primaryArtistId] : [],
-    genres: r.genres ?? [],
-    versionType: r.versionType,
-  }));
-}
-
 // Pull sampler picks until upcoming has TARGET_DEPTH items or the sampler
 // gives up. Each pick updates the sampler state's cooldowns immediately so
 // the next call within this loop respects them. Capped at REFILL_MAX_ATTEMPTS
@@ -111,6 +68,7 @@ async function loadCandidates(tx: DbExec, userId: string): Promise<Candidate[]> 
 function refillToTarget(
   state: SessionState,
   candidates: Candidate[],
+  config: SamplerConfig,
   now: number,
 ): { state: SessionState; addedCount: number } {
   let tl = timelineOf(state);
@@ -121,7 +79,7 @@ function refillToTarget(
     const result = pickNext({
       candidates,
       state: s,
-      config: DEFAULT_CONFIG,
+      config,
       now,
       rng: Math.random,
     });
@@ -225,6 +183,23 @@ export const POST: RequestHandler = async ({ locals, request }) => {
   const body = validate(await request.json());
   const now = Date.now();
 
+  // Settings read + playlist prefetch run OUTSIDE the session lock — a cold
+  // playlist cache means seconds of Spotify fetches, which must not hold the
+  // DB transaction + advisory lock open. Only refill-capable actions need
+  // candidates at all; edits (back/add/remove/reorder) skip the prefetch.
+  // Null token → playlist sources are skipped; the shuffle degrades to the
+  // library source.
+  const isForward = body.action === 'advance' || body.action === 'forward';
+  const shouldRefill = isForward || body.action === 'sync';
+  const settings = await loadUserSettings(db, userId);
+  const config = effectiveSamplerConfig(settings, poolSides(settings.sources));
+  const prefetched = shouldRefill
+    ? await (async () => {
+        const token = await getValidAccessToken(userId).catch(() => null);
+        return prefetchPlaylists(token?.access_token ?? null, userId, settings.sources);
+      })()
+    : { playlists: [], skippedPlaylists: [] };
+
   return await withUserSessionLock(userId, async (tx) => {
     let nextState: SessionState = await loadSessionState(tx, userId, now);
 
@@ -242,16 +217,16 @@ export const POST: RequestHandler = async ({ locals, request }) => {
     // Forward AND sync shrink upcoming (sync folds skipped tracks into history
     // when following Spotify forward), so both top the queue back up. back/add/
     // remove/reorder don't shrink upcoming, so they never refill.
-    const isForward = body.action === 'advance' || body.action === 'forward';
-    const shouldRefill = isForward || body.action === 'sync';
     let candidatesCache: Candidate[] | null = null;
     async function getCandidates(): Promise<Candidate[]> {
-      if (candidatesCache == null) candidatesCache = await loadCandidates(tx, userId);
+      if (candidatesCache == null) {
+        candidatesCache = await loadCandidates(tx, userId, settings.sources, prefetched);
+      }
       return candidatesCache;
     }
 
     if (isForward && timelineOf(nextState).upcoming.length === 0) {
-      const refilled = refillToTarget(nextState, await getCandidates(), now);
+      const refilled = refillToTarget(nextState, await getCandidates(), config, now);
       nextState = refilled.state;
     }
 
@@ -259,11 +234,11 @@ export const POST: RequestHandler = async ({ locals, request }) => {
     nextState = { ...nextState, timeline: tl };
 
     if (shouldRefill && tl.upcoming.length < TARGET_DEPTH) {
-      const refilled = refillToTarget(nextState, await getCandidates(), now);
+      const refilled = refillToTarget(nextState, await getCandidates(), config, now);
       nextState = refilled.state;
     }
 
-    await saveSessionState(tx, userId, nextState, DEFAULT_CONFIG);
+    await saveSessionState(tx, userId, nextState, settings);
     return json({ timeline: timelineOf(nextState) });
   });
 };

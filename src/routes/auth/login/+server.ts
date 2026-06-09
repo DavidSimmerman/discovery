@@ -18,6 +18,10 @@ const SCOPES = [
   'user-read-recently-played',
   'user-library-read',
   'user-top-read',
+  // Shuffle sources: list the user's own playlists and read their tracks so a
+  // playlist can be picked as a shuffle pool (e.g. rate-walking an import).
+  'playlist-read-private',
+  'playlist-read-collaborative',
 ].join(' ');
 
 export const GET: RequestHandler = async ({ cookies }) => {

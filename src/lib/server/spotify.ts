@@ -251,6 +251,109 @@ export async function fetchRecentlyPlayed(
   );
 }
 
+export interface SpotifyPlaylistSummary {
+  id: string;
+  name: string;
+  imageUrl: string | null;
+  total: number;
+  snapshotId: string;
+}
+
+// All of the user's playlists (owned + followed + collaborative), paginated.
+// Requires playlist-read-private / playlist-read-collaborative scopes.
+export async function fetchMyPlaylists(accessToken: string): Promise<SpotifyPlaylistSummary[]> {
+  const out: SpotifyPlaylistSummary[] = [];
+  let url: string | null = 'https://api.spotify.com/v1/me/playlists?limit=50';
+  while (url) {
+    const res: Response = await fetch(url, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!res.ok) throw new SpotifyApiError(res.status, `Spotify /me/playlists failed: ${res.status}`);
+    const json: {
+      next?: string | null;
+      items?: {
+        id?: string;
+        name?: string;
+        images?: { url: string }[] | null;
+        tracks?: { total?: number } | null;
+        snapshot_id?: string;
+      }[];
+    } = await res.json();
+    for (const p of json.items ?? []) {
+      if (!p?.id) continue;
+      out.push({
+        id: p.id,
+        name: p.name ?? '',
+        imageUrl: p.images?.[0]?.url ?? null,
+        total: p.tracks?.total ?? 0,
+        snapshotId: p.snapshot_id ?? '',
+      });
+    }
+    url = json.next ?? null;
+  }
+  return out;
+}
+
+export interface PlaylistTrack {
+  uri: string;
+  name: string;
+  artists: { id: string | null; name: string }[];
+  explicit: boolean;
+  // For ISRC-aware rating matches (Spotify relinks / duplicate album URIs).
+  isrc: string | null;
+}
+
+// Every playable track in a playlist, paginated 100 at a time. Local files and
+// podcast episodes are dropped (no spotify:track: URI → can't rate or shuffle
+// them). `fields` trims the payload to what we use.
+export async function fetchPlaylistTracks(
+  accessToken: string,
+  playlistId: string,
+): Promise<PlaylistTrack[]> {
+  const fields = encodeURIComponent(
+    'next,items(track(uri,name,explicit,external_ids(isrc),artists(id,name)))',
+  );
+  const out: PlaylistTrack[] = [];
+  let url: string | null =
+    `https://api.spotify.com/v1/playlists/${playlistId}/tracks?limit=100&fields=${fields}`;
+  while (url) {
+    const res: Response = await fetch(url, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!res.ok) {
+      throw new SpotifyApiError(res.status, `Spotify playlist tracks failed: ${res.status}`);
+    }
+    const json: {
+      next?: string | null;
+      items?: {
+        track?: {
+          uri?: string;
+          name?: string;
+          explicit?: boolean;
+          external_ids?: { isrc?: string } | null;
+          artists?: { id?: string; name?: string }[];
+        } | null;
+      }[];
+    } = await res.json();
+    for (const item of json.items ?? []) {
+      const t = item?.track;
+      if (!t?.uri || !t.uri.startsWith('spotify:track:')) continue;
+      out.push({
+        uri: t.uri,
+        name: t.name ?? '',
+        artists: (t.artists ?? []).map((a: { id?: string; name?: string }) => ({
+          id: a.id ?? null,
+          name: a.name ?? '',
+        })),
+        explicit: Boolean(t.explicit),
+        isrc: t.external_ids?.isrc ?? null,
+      });
+    }
+    url = json.next ?? null;
+  }
+  return out;
+}
+
 // Resolve a Last.fm (artist, title) pair to a Spotify URI via /v1/search.
 // Returns null when nothing plausible matches.
 export async function searchTrack(

@@ -9,6 +9,7 @@
   import PremiumGate from '$lib/components/PremiumGate.svelte';
   import TabbedPanel from '$lib/components/TabbedPanel.svelte';
   import { getPlaybackStore } from '$lib/playback/player.svelte';
+  import { SlidersHorizontal } from '@lucide/svelte';
 
   const playback = getPlaybackStore();
   const product = $derived(page.data.user?.product ?? 'open');
@@ -133,7 +134,17 @@
   {/if}
 
   <PremiumGate {product}>
-    <ShuffleButton store={playback} sampler label="Shuffle my library" />
+    <div class="flex items-center gap-2">
+      <ShuffleButton store={playback} sampler label="Shuffle" />
+      <a
+        href="/shuffle-settings"
+        aria-label="Shuffle settings"
+        data-testid="shuffle-settings-link"
+        class="inline-flex items-center gap-1.5 rounded-full border border-purple-400/40 bg-purple-500/15 px-3 py-1.5 text-xs backdrop-blur transition-colors hover:bg-purple-500/25"
+      >
+        <SlidersHorizontal class="size-3.5" />
+      </a>
+    </div>
   </PremiumGate>
 
   <div aria-live="polite" class="min-h-5 text-sm text-red-400">

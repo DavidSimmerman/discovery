@@ -427,18 +427,25 @@ export function createPlaybackStore(): PlaybackStore {
       return;
     }
 
+    // Settle window: right after a push, Spotify takes ~1-2s to converge onto
+    // the context we handed it, reporting transitional URIs in the meantime —
+    // the pre-push track, a transient null, or even another member of the list
+    // we just pushed before it lands on `current`. Until it settles, the ONLY
+    // actionable state is an exact match to `current` (handled above); treat
+    // everything else as noise. This must sit ABOVE the native-advance case:
+    // otherwise a transitional list-member URI is misread as a user skip and
+    // triggers a sync + re-push, which restarts playback and resets the queue —
+    // repeatedly, as the cursor chases Spotify across the transition.
+    if (Date.now() < contextSettleUntil) {
+      lastCurrentUri = currentUri;
+      return;
+    }
+
     // 2. Native advance/rewind within the context we pushed → follow it.
     if (currentUri != null && lastPushedUris.includes(currentUri)) {
       samplerBusy = true;
       const gen = samplerGeneration;
       void followToUri(gen, currentUri, positionMs).finally(() => { samplerBusy = false; });
-      lastCurrentUri = currentUri;
-      return;
-    }
-
-    // Settle window: right after a push, Spotify may still report the pre-push
-    // track (or a transient null) for a poll or two. Don't stop or reseed yet.
-    if (Date.now() < contextSettleUntil) {
       lastCurrentUri = currentUri;
       return;
     }

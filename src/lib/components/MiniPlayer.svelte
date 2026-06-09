@@ -29,7 +29,7 @@
   <div
     role="button"
     tabindex="0"
-    class="fixed inset-x-3 z-40 flex cursor-pointer items-center gap-3 rounded-2xl border border-white/15 bg-white/[0.08] px-3 py-2.5 text-left shadow-2xl shadow-black/60 backdrop-blur-xl transition-[bottom] {bottomClass}"
+    class="fixed inset-x-3 z-40 flex transform-gpu cursor-pointer items-center gap-3 rounded-2xl border border-white/15 bg-white/[0.08] px-3 py-2.5 text-left shadow-2xl shadow-black/60 backdrop-blur-xl transition-[bottom] [backface-visibility:hidden] {bottomClass}"
     onclick={() => goto('/now-playing')}
     onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && goto('/now-playing')}
     aria-label="Open now playing"

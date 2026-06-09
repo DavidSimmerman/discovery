@@ -15,7 +15,7 @@
 
 <nav
   aria-label="Primary"
-  class="fixed inset-x-6 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-50 flex h-12 rounded-full border border-white/15 bg-white/[0.08] p-1 shadow-2xl shadow-black/60 backdrop-blur-xl"
+  class="fixed inset-x-6 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-50 flex h-12 transform-gpu rounded-full border border-white/15 bg-white/[0.08] p-1 shadow-2xl shadow-black/60 backdrop-blur-xl [backface-visibility:hidden]"
 >
   {#each items as item (item.href)}
     {@const active = isActive(item.match)}

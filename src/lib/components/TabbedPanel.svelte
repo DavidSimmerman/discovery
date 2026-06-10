@@ -80,6 +80,10 @@
   // Versions / Artist data (preloaded on track change). null = not loaded yet.
   let versionsData = $state<{ library: Entry[]; catalog: Entry[] } | null>(null);
   let artistData = $state<LibraryRow[] | null>(null);
+  // "In your library" list: collapsed to 10 rows by default; Show all expands,
+  // and a sticky Hide pill lets you collapse again from anywhere in the list.
+  const ARTIST_LIST_COLLAPSED = 10;
+  let artistListExpanded = $state(false);
 
   // Artist-tab discovery (stats + top unrated). Lazy — loaded when the Artist
   // tab is opened, keyed by artist (not track) so same-artist track changes keep
@@ -175,6 +179,7 @@
 
   async function loadArtist(name: string): Promise<void> {
     artistAc?.abort();
+    artistListExpanded = false; // new artist → back to the collapsed view
     const trimmed = (name ?? '').trim();
     if (trimmed === '') { artistData = []; return; }
     const ac = new AbortController();
@@ -559,8 +564,8 @@
       <!-- the artist's rated tracks in the library -->
       {#if rated.length > 0}
         <p class="mt-1 px-1 text-[10px] font-semibold uppercase tracking-wider text-white/40">{artistName} · in your library</p>
-        <div class="flex flex-col gap-1" data-testid="artist-list">
-          {#each rated as row (row.uri)}
+        <div class="relative flex flex-col gap-1" data-testid="artist-list">
+          {#each artistListExpanded ? rated : rated.slice(0, ARTIST_LIST_COLLAPSED) as row (row.uri)}
             {@const playingHere = playback.state.track?.uri === row.uri}
             <div class="flex items-center gap-1">
               <button
@@ -589,6 +594,31 @@
               <OpenInSpotifyLink uri={row.uri} />
             </div>
           {/each}
+          {#if rated.length > ARTIST_LIST_COLLAPSED}
+            {#if !artistListExpanded}
+              <button
+                type="button"
+                data-testid="artist-list-show-all"
+                onclick={() => (artistListExpanded = true)}
+                class="mt-1 w-full rounded-xl border border-white/10 bg-white/[0.04] py-2 text-center text-xs font-medium text-white/70 transition-colors hover:bg-white/[0.08]"
+              >
+                Show all {rated.length}
+              </button>
+            {:else}
+              <!-- sticky so the list can be collapsed from anywhere mid-scroll;
+                   bottom offset clears the bottom nav + mini player -->
+              <div class="sticky bottom-32 z-10 mt-1 flex justify-center">
+                <button
+                  type="button"
+                  data-testid="artist-list-hide"
+                  onclick={() => (artistListExpanded = false)}
+                  class="rounded-full border border-white/15 bg-black/80 px-4 py-1.5 text-xs font-medium text-white/80 shadow-lg shadow-black/50 backdrop-blur transition-colors hover:bg-black/60"
+                >
+                  Hide all
+                </button>
+              </div>
+            {/if}
+          {/if}
         </div>
       {/if}
 

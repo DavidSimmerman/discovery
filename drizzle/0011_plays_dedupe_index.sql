@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "plays_user_track_played_at_uq" ON "plays" USING btree ("user_id","spotify_track_uri","played_at");

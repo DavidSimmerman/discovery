@@ -20,6 +20,7 @@ import {
   users,
 } from '$lib/server/db/schema';
 import { fetchRecentlyPlayed, SpotifyApiError } from '$lib/server/spotify';
+import { ingestSpotifyPlays } from '$lib/server/plays';
 import { largestAlbumArtUrl } from '$lib/server/tracks';
 
 // Default lookback for the history view + badge count.
@@ -177,6 +178,16 @@ export async function listHistory(
         })),
       )
       .onConflictDoNothing();
+  }
+
+  // 2b. Fold these plays into the append-only log (play counts, cooldown
+  //     safety net). Structural dedupe makes re-ingestion a no-op.
+  if (spotifyItems.length > 0) {
+    try {
+      await ingestSpotifyPlays(userId, spotifyItems);
+    } catch (err) {
+      console.error('[listHistory] plays ingest failed', { userId, err });
+    }
   }
 
   // 3. In-app plays within the window.

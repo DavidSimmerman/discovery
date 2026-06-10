@@ -10,6 +10,7 @@ import {
   check,
   unique,
   index,
+  uniqueIndex,
   boolean,
   date,
   real,
@@ -186,6 +187,14 @@ export const plays = pgTable(
       table.userId,
       table.spotifyTrackUri,
       table.playedAt.desc(),
+    ),
+    // Idempotent ingestion from Spotify recently-played: the same play (same
+    // user/track/timestamp) can arrive on every poll — ON CONFLICT DO NOTHING
+    // against this makes re-ingestion a no-op.
+    uniqueIndex('plays_user_track_played_at_uq').on(
+      table.userId,
+      table.spotifyTrackUri,
+      table.playedAt,
     ),
   ],
 );

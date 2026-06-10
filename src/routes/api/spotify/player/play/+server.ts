@@ -1,7 +1,9 @@
 import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { getValidAccessToken } from '$lib/server/tokens';
-import { mapSpotifyPlayError } from '$lib/playback/errors';
+import { mapSpotifyPlayError, type PlayErrorShape } from '$lib/playback/errors';
+import { listDevices, pickBestDevice } from '$lib/server/playback/devices';
+import { spotifyPlay } from '$lib/server/playback/spotify-play';
 
 interface UrisBody { uris: string[]; position_ms?: number; device_id?: string }
 interface ContextBody {
@@ -12,6 +14,13 @@ interface ContextBody {
 }
 
 type Body = Partial<UrisBody> & Partial<ContextBody>;
+
+async function mapFailure(res: Response): Promise<PlayErrorShape> {
+  const text = await res.text();
+  let parsed: unknown = {};
+  try { parsed = text ? JSON.parse(text) : {}; } catch { /* leave as {} */ }
+  return mapSpotifyPlayError(res.status, parsed, res.headers.get('retry-after'));
+}
 
 export const PUT: RequestHandler = async ({ locals, request }) => {
   if (!locals.user) throw error(401, 'not logged in');
@@ -36,27 +45,24 @@ export const PUT: RequestHandler = async ({ locals, request }) => {
   // offset — dropping it here restarted the song from 0 on every re-push.
   if (typeof body.position_ms === 'number') payload.position_ms = body.position_ms;
 
-  // device_id is optional: when absent, Spotify routes to whichever device the
-  // user has marked active. Surfaces no_active_device (409) when nothing is.
-  const qs = body.device_id ? `?device_id=${encodeURIComponent(body.device_id)}` : '';
-  const res = await fetch(
-    `https://api.spotify.com/v1/me/player/play${qs}`,
-    {
-      method: 'PUT',
-      headers: {
-        authorization: `Bearer ${access_token}`,
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify(payload),
-    },
-  );
-
+  let res = await spotifyPlay(access_token, payload, body.device_id);
   if (res.ok) return new Response(null, { status: 204 });
 
-  const text = await res.text();
-  let parsed: unknown = {};
-  try { parsed = text ? JSON.parse(text) : {}; } catch { /* leave as {} */ }
-  const mapped = mapSpotifyPlayError(res.status, parsed, res.headers.get('retry-after'));
+  let mapped = await mapFailure(res);
+
+  // Silent device fallback: "no active device" usually just means Spotify is
+  // backgrounded — it still shows up as an *available* device. Target it
+  // explicitly and retry once. Skipped when the caller picked a device
+  // themselves; their choice failing shouldn't silently re-route elsewhere.
+  if (mapped.error === 'no_active_device' && !body.device_id) {
+    const device = pickBestDevice(await listDevices(access_token));
+    if (device?.id) {
+      res = await spotifyPlay(access_token, payload, device.id);
+      if (res.ok) return new Response(null, { status: 204 });
+      mapped = await mapFailure(res);
+    }
+  }
+
   // Translate to HTTP status the client can switch on.
   const clientStatus =
     mapped.error === 'no_active_device' ? 409 :

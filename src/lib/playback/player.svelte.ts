@@ -36,6 +36,10 @@ const MAX_CONTEXT = 100;
 const POLL_ACTIVE_MS = 2500;
 const POLL_HIDDEN_MS = 15_000;
 
+// Pending-play status poll (our own server, cheap). Only runs while a pending
+// play is armed; the server does the real device-watching.
+const PENDING_POLL_MS = 2000;
+
 export type PlaybackError =
   | null
   | 'no_device'    // 409 — no active Spotify device, user needs to open one
@@ -57,6 +61,25 @@ export interface PlaybackState {
   track: PlaybackTrack | null;
   context_uri: string | null;
   isrc: string | null;
+}
+
+// A play that couldn't start because Spotify has no available device anywhere
+// (app fully killed). The queue is armed server-side (pending-play job); the
+// UI shows "Open Spotify to begin playing" and the server fires the play the
+// moment Spotify shows up as a device.
+export interface PendingPlay {
+  uris: string[];
+  // Armed by a sampler start → on 'started' the store adopts the session
+  // (lastPushedUris + settle window + isSampling) as if the push had landed.
+  forSampler: boolean;
+}
+
+// What a "Resume shuffle" affordance needs to render: the track the session
+// left off on and how much queue is left. Derived from the server timeline,
+// which survives client-side stopSampling (divergence, reloads).
+export interface ResumeInfo {
+  currentUri: string;
+  remaining: number; // current + upcoming
 }
 
 const EMPTY_STATE: PlaybackState = {
@@ -95,6 +118,17 @@ export interface PlaybackStore {
   readonly isSampling: boolean;
   // Client mirror of the server-side timeline. Null when not sampling.
   readonly timeline: Timeline | null;
+
+  // Cold-start pending play: non-null while a queue is armed server-side
+  // waiting for a Spotify device to appear.
+  readonly pendingPlay: PendingPlay | null;
+  cancelPendingPlay(): Promise<void>;
+
+  // Interrupted-shuffle recovery: the server timeline outlives client-side
+  // stopSampling, so a session broken by a foreign track (or a reload onto
+  // one) can be offered back. Null when there's nothing worth resuming.
+  // Resume itself is just startSampler() without reset.
+  getResumeInfo(): Promise<ResumeInfo | null>;
 
   // Force a state refresh — call after a remote action to catch up before
   // the next scheduled poll.
@@ -148,6 +182,8 @@ export function createPlaybackStore(): PlaybackStore {
   // to re-push.
   let isSampling = $state(false);
   let timeline = $state<Timeline | null>(null);
+  let pendingPlay = $state<PendingPlay | null>(null);
+  let pendingPollHandle: ReturnType<typeof setTimeout> | null = null;
   let lastPushedUris: string[] = [];
   let samplerBusy = false; // guards against overlapping follow/re-push across polls
   let lastCurrentUri: string | null = null; // current track URI at the previous poll
@@ -233,6 +269,9 @@ export function createPlaybackStore(): PlaybackStore {
   function onVisibilityChange(): void {
     if (document.visibilityState === 'visible') {
       void refresh();
+      // Coming back from Spotify: the server may have fired our pending play
+      // while this tab was suspended — find out right away, not in 2s.
+      if (pendingPlay) void checkPendingPlay();
     }
     schedulePoll();
   }
@@ -250,8 +289,75 @@ export function createPlaybackStore(): PlaybackStore {
   function destroy(): void {
     if (pollHandle != null) clearTimeout(pollHandle);
     pollHandle = null;
+    if (pendingPollHandle != null) clearTimeout(pendingPollHandle);
+    pendingPollHandle = null;
     isReady = false;
     if (browser) document.removeEventListener('visibilitychange', onVisibilityChange);
+  }
+
+  // ── Cold-start pending play ──────────────────────────────────────────
+
+  // Hand the queue to the server-side pending-play job and reflect it in the
+  // UI. Server-side because iOS freezes a backgrounded PWA's JS: the play must
+  // fire while the user is in Spotify, and only the server is awake then.
+  async function armPendingPlay(uris: string[], forSampler: boolean): Promise<boolean> {
+    try {
+      const res = await fetch('/api/spotify/player/pending', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ uris }),
+      });
+      if (!res.ok) return false;
+      pendingPlay = { uris, forSampler };
+      err = null; // the pending UI replaces the no_device error message
+      schedulePendingPoll();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function schedulePendingPoll(): void {
+    if (pendingPollHandle != null) clearTimeout(pendingPollHandle);
+    pendingPollHandle = null;
+    if (!pendingPlay) return;
+    pendingPollHandle = setTimeout(() => void checkPendingPlay(), PENDING_POLL_MS);
+  }
+
+  async function checkPendingPlay(): Promise<void> {
+    if (!pendingPlay) return;
+    try {
+      const res = await fetch('/api/spotify/player/pending');
+      if (!res.ok) { schedulePendingPoll(); return; }
+      const j = (await res.json()) as { status?: string };
+      if (j.status === 'pending') { schedulePendingPoll(); return; }
+      const armed = pendingPlay;
+      pendingPlay = null;
+      if (pendingPollHandle != null) { clearTimeout(pendingPollHandle); pendingPollHandle = null; }
+      if (j.status === 'started') {
+        // The server pushed our queue. For a sampler start, adopt the session
+        // exactly as if pushContext had landed locally.
+        if (armed.forSampler && timeline?.current) {
+          lastPushedUris = armed.uris;
+          contextSettleUntil = Date.now() + 5000;
+          isSampling = true;
+          setSamplerActive(true);
+        }
+        void refresh();
+      }
+      // superseded/expired/cancelled → just clear. The server timeline (if this
+      // was a sampler) survives, so the resume affordances can offer it back.
+    } catch {
+      schedulePendingPoll();
+    }
+  }
+
+  async function cancelPendingPlay(): Promise<void> {
+    pendingPlay = null;
+    if (pendingPollHandle != null) { clearTimeout(pendingPollHandle); pendingPollHandle = null; }
+    try {
+      await fetch('/api/spotify/player/pending', { method: 'DELETE' });
+    } catch { /* job will expire on its own */ }
   }
 
   // ── Control ──────────────────────────────────────────────────────────
@@ -274,6 +380,9 @@ export function createPlaybackStore(): PlaybackStore {
       body: JSON.stringify(payload),
     });
     const ok = handleControlResponse(res);
+    // A play landing means a device is live — a still-armed pending job would
+    // later fire a stale queue over whatever the user just started.
+    if (ok && pendingPlay) void cancelPendingPlay();
     // Spotify needs ~200ms to reflect the change; chase it.
     setTimeout(() => void refresh(), 300);
     return ok;
@@ -378,7 +487,18 @@ export function createPlaybackStore(): PlaybackStore {
       timeline = tl;
       const ok = await pushContext(gen);
       if (gen !== samplerGeneration) return;
-      if (!ok) { stopSampling(); return; }
+      if (!ok) {
+        // No device anywhere (the play endpoint already tried the silent
+        // device fallback) → arm the cold-start pending play instead of
+        // giving up. Keep `timeline` so checkPendingPlay can adopt the
+        // session when the server fires the push.
+        if (err === 'no_device') {
+          const uris = [tl.current, ...tl.upcoming].slice(0, MAX_CONTEXT);
+          if (await armPendingPlay(uris, true)) return;
+        }
+        stopSampling();
+        return;
+      }
       isSampling = true;
       setSamplerActive(true);
     } finally {
@@ -589,14 +709,26 @@ export function createPlaybackStore(): PlaybackStore {
 
   async function playTrack(uri: string, allUris: readonly string[]): Promise<void> {
     stopSampling(); // also clears the sampler resume marker
-    const queue = buildQueueFromClick(uri, allUris);
-    await callPlay({ uris: queue.slice(0, 100) });
+    const queue = buildQueueFromClick(uri, allUris).slice(0, 100);
+    const ok = await callPlay({ uris: queue });
+    if (!ok && err === 'no_device') await armPendingPlay(queue, false);
   }
 
   async function shuffle(uris: readonly string[]): Promise<void> {
     stopSampling(); // also clears the sampler resume marker
-    const ordered = shuffleFisherYates(uris);
-    await callPlay({ uris: ordered.slice(0, 100) });
+    const ordered = shuffleFisherYates(uris).slice(0, 100);
+    const ok = await callPlay({ uris: ordered });
+    if (!ok && err === 'no_device') await armPendingPlay(ordered, false);
+  }
+
+  // Interrupted-shuffle probe: is there a server timeline worth offering back?
+  // (The chip/banner UIs call this; resume itself is startSampler() sans reset.)
+  async function getResumeInfo(): Promise<ResumeInfo | null> {
+    if (isSampling) return null;
+    const tl = await fetchTimeline();
+    if (isSampling) return null; // raced a concurrent start
+    if (!tl?.current || tl.upcoming.length === 0) return null;
+    return { currentUri: tl.current, remaining: 1 + tl.upcoming.length };
   }
 
   async function togglePlay(): Promise<void> {
@@ -639,6 +771,9 @@ export function createPlaybackStore(): PlaybackStore {
     startSampler,
     get isSampling() { return isSampling; },
     get timeline() { return timeline; },
+    get pendingPlay() { return pendingPlay; },
+    cancelPendingPlay,
+    getResumeInfo,
     togglePlay, next, prev, seek,
     refresh,
     setCurrentRating,

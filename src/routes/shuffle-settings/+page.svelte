@@ -1411,7 +1411,9 @@
         {:else if !settings || previewCount == null}
           Shuffle
         {:else if previewPending}
-          Shuffle <span class="opacity-60">{previewCount.toLocaleString()}…</span>
+          <!-- a 0 mid-recount is almost always "sources still resolving/erroring",
+               not a real zero — show a neutral counting state instead -->
+          Shuffle <span class="opacity-60">{previewCount > 0 ? `${previewCount.toLocaleString()}…` : 'counting…'}</span>
         {:else}
           Shuffle {previewCount.toLocaleString()} {previewCount === 1 ? 'song' : 'songs'}
         {/if}

@@ -280,10 +280,12 @@ export interface SpotifyPlaylistSummary {
 // Requires playlist-read-private / playlist-read-collaborative scopes.
 // Feb-2026 API: the count moved from `tracks.total` to `items.total`; read the
 // new field first, keep the legacy one as a fallback.
-// One page GET with retries for transient upstream failures: 429 honors
-// Retry-After, 5xx backs off briefly — Spotify throws occasional 503s at
-// dev-mode apps and a single one shouldn't kill a whole listing.
-async function fetchPageWithRetry(url: string, accessToken: string, what: string): Promise<Response> {
+// One GET with retries for transient upstream failures: 429 honors
+// Retry-After, 5xx backs off briefly — Spotify throws bursts of 503s at
+// dev-mode apps and a single one shouldn't kill a whole listing. Shared by
+// every paginated/listing read (playlists, playlist items, saved tracks,
+// snapshot probes).
+export async function fetchPageWithRetry(url: string, accessToken: string, what: string): Promise<Response> {
   const BACKOFF_MS = [500, 1500];
   for (let attempt = 0; ; attempt++) {
     const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
@@ -362,12 +364,7 @@ export async function fetchPlaylistTracks(
   let url: string | null =
     `https://api.spotify.com/v1/playlists/${playlistId}/items?limit=100&fields=${fields}`;
   while (url) {
-    const res: Response = await fetch(url, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-    if (!res.ok) {
-      throw new SpotifyApiError(res.status, `Spotify playlist tracks failed: ${res.status}`);
-    }
+    const res: Response = await fetchPageWithRetry(url, accessToken, 'playlist tracks');
     const json: {
       next?: string | null;
       items?: { item?: RawPlaylistTrack; track?: RawPlaylistTrack }[];
@@ -424,8 +421,17 @@ type SavedPage = { next?: string | null; total?: number; items?: RawSavedEntry[]
 
 const SAVED_TRACKS_URLS = [
   'https://api.spotify.com/v1/me/library?type=track',
+  'https://api.spotify.com/v1/me/library?types=track',
+  'https://api.spotify.com/v1/me/library',
   'https://api.spotify.com/v1/me/tracks', // legacy fallback
 ];
+// Once a candidate works, stick with it for the process lifetime — no point
+// re-burning requests (and rate budget) rediscovering it per call.
+let savedTracksUrlIndex: number | null = null;
+
+export function _resetSavedTracksResolverForTests(): void {
+  savedTracksUrlIndex = null;
+}
 
 // Resolve which listing endpoint this account/app can use, fetch the first
 // page, and remember the winner for the pagination loop (`next` links keep
@@ -435,7 +441,10 @@ async function fetchFirstSavedPage(
   limit: number,
 ): Promise<{ page: SavedPage; next: string | null }> {
   let lastStatus = 0;
-  for (const base of SAVED_TRACKS_URLS) {
+  const candidates =
+    savedTracksUrlIndex != null ? [SAVED_TRACKS_URLS[savedTracksUrlIndex]] : SAVED_TRACKS_URLS;
+  const tried: string[] = [];
+  for (const base of candidates) {
     // Inline transient retry (429/5xx) per candidate, mirroring
     // fetchPageWithRetry — but 4xx must fall through to the next candidate
     // instead of throwing, so we can't reuse it directly.
@@ -452,19 +461,23 @@ async function fetchFirstSavedPage(
       );
     }
     if (res.ok) {
-      if (base !== SAVED_TRACKS_URLS[0]) {
-        console.warn('[savedTracks] /me/library listing unavailable — using legacy /me/tracks');
+      if (savedTracksUrlIndex == null) {
+        savedTracksUrlIndex = SAVED_TRACKS_URLS.indexOf(base);
+        console.warn('[savedTracks] listing endpoint resolved', { base, rejected: tried });
       }
       const page = (await res.json()) as SavedPage;
       return { page, next: page.next ?? null };
     }
     lastStatus = res.status;
-    // Post-retry: 4xx → endpoint not available for this app; try the next
+    tried.push(`${base} -> ${res.status}`);
+    // Post-retry: 4xx → endpoint/param shape not accepted; try the next
     // candidate. Persistent 5xx/429 → genuine failure, surface it.
     if (res.status >= 500 || res.status === 429) {
+      console.warn('[savedTracks] listing failed', { tried });
       throw new SpotifyApiError(res.status, `Spotify saved tracks failed: ${res.status}`);
     }
   }
+  console.warn('[savedTracks] every listing candidate rejected', { tried });
   throw new SpotifyApiError(lastStatus, `Spotify saved tracks failed: ${lastStatus}`);
 }
 
@@ -492,12 +505,7 @@ export async function fetchSavedTracks(accessToken: string): Promise<PlaylistTra
   pushSavedEntries(out, first.page);
   let url = first.next;
   while (url) {
-    const res: Response = await fetch(url, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-    if (!res.ok) {
-      throw new SpotifyApiError(res.status, `Spotify saved tracks failed: ${res.status}`);
-    }
+    const res: Response = await fetchPageWithRetry(url, accessToken, 'saved tracks');
     const page = (await res.json()) as SavedPage;
     pushSavedEntries(out, page);
     url = page.next ?? null;

@@ -10,7 +10,7 @@ vi.mock('$env/static/private', () => ({
 }));
 vi.mock('$env/static/public', () => ({ PUBLIC_BASE_URL: 'http://localhost' }));
 
-import { fetchSavedTracks, fetchSavedTracksProbe } from '$lib/server/spotify';
+import { fetchSavedTracks, fetchSavedTracksProbe, _resetSavedTracksResolverForTests } from '$lib/server/spotify';
 
 const calls: string[] = [];
 function mockFetch(pages: unknown[]) {
@@ -29,6 +29,7 @@ function mockFetch(pages: unknown[]) {
 afterEach(() => {
   calls.length = 0;
   vi.unstubAllGlobals();
+  _resetSavedTracksResolverForTests();
 });
 
 const saved = (uri: string, addedAt = '2026-06-01T00:00:00Z') => ({
@@ -91,15 +92,31 @@ describe('fetchSavedTracks', () => {
     expect(out.map((t) => t.uri)).toEqual(['spotify:track:cccccccccccccccccccccc']);
   });
 
-  it('falls back to legacy /v1/me/tracks when /me/library 4xxs', async () => {
+  it('falls back to legacy /v1/me/tracks when every /me/library variant 4xxs', async () => {
     mockFetch([
       { __status: 404 },
+      { __status: 400 },
+      { __status: 400 },
       { next: null, items: [saved('spotify:track:cccccccccccccccccccccc')] },
     ]);
     const out = await fetchSavedTracks('tok');
     expect(new URL(calls[0]).pathname).toBe('/v1/me/library');
-    expect(new URL(calls[1]).pathname).toBe('/v1/me/tracks');
+    expect(new URL(calls[3]).pathname).toBe('/v1/me/tracks');
     expect(out).toHaveLength(1);
+  });
+
+  it('memoizes the resolved endpoint across calls', async () => {
+    mockFetch([
+      { __status: 404 },
+      { __status: 400 },
+      { __status: 400 },
+      { next: null, items: [saved('spotify:track:cccccccccccccccccccccc')] },
+    ]);
+    await fetchSavedTracks('tok');
+    const callsAfterFirst = calls.length;
+    await fetchSavedTracks('tok'); // second run goes straight to the winner
+    expect(calls.length).toBe(callsAfterFirst + 1);
+    expect(new URL(calls[callsAfterFirst]).pathname).toBe('/v1/me/tracks');
   });
 
   it('accepts the Feb-2026 items[].item entry shape', async () => {

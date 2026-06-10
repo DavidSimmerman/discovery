@@ -71,6 +71,13 @@
       "when": 1780885304996,
       "tag": "0009_empty_marrow",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1781122555518,
+      "tag": "0010_spotify_tokens_scope",
+      "breakpoints": true
     }
   ]
 }

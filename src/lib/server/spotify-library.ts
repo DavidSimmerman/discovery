@@ -29,7 +29,10 @@ export async function ensureSavedTrack(userId: string, trackUri: string): Promis
     );
     // Can't verify → don't write. A blind PUT on an already-liked track would
     // reorder Liked Songs (see header comment).
-    if (!contains.ok) return;
+    if (!contains.ok) {
+      console.warn('[likedSync] contains check failed', { userId, status: contains.status });
+      return;
+    }
     const [alreadySaved] = (await contains.json()) as boolean[];
     if (alreadySaved) return;
 
@@ -47,6 +50,9 @@ export async function ensureSavedTrack(userId: string, trackUri: string): Promis
     // grant). Flag the user for re-auth (matching history/top-lists) so the
     // next navigation bounces them through OAuth instead of silently never
     // mirroring ratings into Liked Songs.
+    if (!save.ok) {
+      console.warn('[likedSync] save failed', { userId, status: save.status });
+    }
     if (save.status === 403) {
       try {
         await db.update(users).set({ needsReauth: true }).where(eq(users.id, userId));

@@ -2,9 +2,17 @@
   // App settings — primarily the account actions the PWA otherwise can't
   // reach (no browser chrome → no way to clear cookies or re-run OAuth).
   import { page } from '$app/state';
-  import { LogOut, RefreshCw, User, SlidersHorizontal, ChevronRight } from '@lucide/svelte';
+  import { LogOut, RefreshCw, User, SlidersHorizontal, ChevronRight, CircleCheck, CircleAlert } from '@lucide/svelte';
 
   const user = $derived(page.data.user ?? null);
+
+  // Granted-scope ground truth (stored from Spotify's token responses).
+  // null = logged in before we started recording scopes — unknown until the
+  // next (re)connect.
+  const grantedScopes = $derived((page.data.grantedScopes as string | null) ?? null);
+  const likedSync = $derived(
+    grantedScopes == null ? 'unknown' : grantedScopes.includes('user-library-modify') ? 'on' : 'off',
+  );
 </script>
 
 <svelte:head><title>Settings · disccovery</title></svelte:head>
@@ -34,6 +42,26 @@
     <section class="flex flex-col gap-2">
       <p class="px-1 text-[10px] font-semibold uppercase tracking-wider text-white/40">Spotify connection</p>
       <div class="flex flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/[0.04]">
+        <div class="flex items-center gap-3 p-4" data-testid="liked-sync-status">
+          {#if likedSync === 'on'}
+            <CircleCheck class="size-4 shrink-0 text-spotify-green" />
+          {:else}
+            <CircleAlert class="size-4 shrink-0 text-amber-400" />
+          {/if}
+          <div class="min-w-0 flex-1">
+            <p class="text-sm font-medium">Liked Songs sync</p>
+            <p class="text-xs text-white/50">
+              {#if likedSync === 'on'}
+                Authorized — 2★+ ratings save to your Liked Songs.
+              {:else if likedSync === 'off'}
+                Spotify hasn't granted the permission — use Reconnect below.
+              {:else}
+                Status unknown — reconnect once to record what's granted.
+              {/if}
+            </p>
+          </div>
+        </div>
+        <div class="mx-4 border-t border-white/[0.06]"></div>
         <a
           href="/auth/login"
           data-sveltekit-reload

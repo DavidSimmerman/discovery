@@ -1,0 +1,1 @@
+ALTER TABLE "spotify_tokens" ADD COLUMN "scope" text;

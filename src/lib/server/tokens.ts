@@ -41,6 +41,9 @@ export async function getValidAccessToken(userId: string): Promise<TokenResult> 
 				accessToken: fresh.access_token,
 				refreshTokenEnc: newEnc,
 				expiresAt: newExpiresAt,
+				// Refresh responses usually echo the grant's scopes; keep the
+				// stored value when omitted rather than nulling our ground truth.
+				...(fresh.scope ? { scope: fresh.scope } : {}),
 				updatedAt: new Date(),
 			})
 			.where(eq(spotifyTokens.userId, userId));

@@ -43,6 +43,10 @@ export const spotifyTokens = pgTable('spotify_tokens', {
   refreshTokenEnc: byteaCol('refresh_token_enc').notNull(),
   accessToken: text('access_token'),
   expiresAt: timestamp('expires_at', { withTimezone: true }),
+  // Space-separated scopes Spotify reported as GRANTED (token exchange /
+  // refresh response). Diagnostic ground truth for "why isn't feature X
+  // syncing" — the consent screen and our request list can both lie.
+  scope: text('scope'),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
 

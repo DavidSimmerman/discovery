@@ -19,6 +19,9 @@ export const GET: RequestHandler = async ({ url, cookies }) => {
   cookies.delete('disccovery_pkce', { path: '/auth/callback' });
 
   const tokenSet = await exchangeCode(code, verifier);
+  // Ground truth for scope debugging — what Spotify says it granted, which is
+  // not always what we asked for (e.g. silently re-used prior consent).
+  console.log('[auth] granted scopes:', tokenSet.scope);
   const me = await fetchSpotifyMe(tokenSet.access_token);
 
   // Feb-2026 API removed `product` from /me; absent → 'premium' so re-logins
@@ -51,6 +54,7 @@ export const GET: RequestHandler = async ({ url, cookies }) => {
       refreshTokenEnc: enc,
       accessToken: tokenSet.access_token,
       expiresAt,
+      scope: tokenSet.scope ?? null,
     })
     .onConflictDoUpdate({
       target: spotifyTokens.userId,
@@ -58,6 +62,7 @@ export const GET: RequestHandler = async ({ url, cookies }) => {
         refreshTokenEnc: enc,
         accessToken: tokenSet.access_token,
         expiresAt,
+        scope: tokenSet.scope ?? null,
         updatedAt: new Date(),
       },
     });

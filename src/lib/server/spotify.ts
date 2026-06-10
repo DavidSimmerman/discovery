@@ -436,9 +436,21 @@ async function fetchFirstSavedPage(
 ): Promise<{ page: SavedPage; next: string | null }> {
   let lastStatus = 0;
   for (const base of SAVED_TRACKS_URLS) {
-    const res = await fetch(`${base}${base.includes('?') ? '&' : '?'}limit=${limit}`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
+    // Inline transient retry (429/5xx) per candidate, mirroring
+    // fetchPageWithRetry — but 4xx must fall through to the next candidate
+    // instead of throwing, so we can't reuse it directly.
+    let res: Response;
+    for (let attempt = 0; ; attempt++) {
+      res = await fetch(`${base}${base.includes('?') ? '&' : '?'}limit=${limit}`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      const transient = res.status === 429 || res.status >= 500;
+      if (!transient || attempt >= 2) break;
+      const after = Number(res.headers.get('Retry-After') ?? '');
+      await new Promise((r) =>
+        setTimeout(r, res.status === 429 && Number.isFinite(after) ? after * 1000 : attempt === 0 ? 500 : 1500),
+      );
+    }
     if (res.ok) {
       if (base !== SAVED_TRACKS_URLS[0]) {
         console.warn('[savedTracks] /me/library listing unavailable — using legacy /me/tracks');
@@ -447,8 +459,8 @@ async function fetchFirstSavedPage(
       return { page, next: page.next ?? null };
     }
     lastStatus = res.status;
-    // 4xx → endpoint not available for this app; try the next candidate.
-    // 5xx/429 → genuine failure, surface it.
+    // Post-retry: 4xx → endpoint not available for this app; try the next
+    // candidate. Persistent 5xx/429 → genuine failure, surface it.
     if (res.status >= 500 || res.status === 429) {
       throw new SpotifyApiError(res.status, `Spotify saved tracks failed: ${res.status}`);
     }

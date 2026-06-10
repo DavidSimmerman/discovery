@@ -261,6 +261,8 @@ export interface SpotifyPlaylistSummary {
 
 // All of the user's playlists (owned + followed + collaborative), paginated.
 // Requires playlist-read-private / playlist-read-collaborative scopes.
+// Feb-2026 API: the count moved from `tracks.total` to `items.total`; read the
+// new field first, keep the legacy one as a fallback.
 export async function fetchMyPlaylists(accessToken: string): Promise<SpotifyPlaylistSummary[]> {
   const out: SpotifyPlaylistSummary[] = [];
   let url: string | null = 'https://api.spotify.com/v1/me/playlists?limit=50';
@@ -275,6 +277,7 @@ export async function fetchMyPlaylists(accessToken: string): Promise<SpotifyPlay
         id?: string;
         name?: string;
         images?: { url: string }[] | null;
+        items?: { total?: number } | null;
         tracks?: { total?: number } | null;
         snapshot_id?: string;
       }[];
@@ -285,7 +288,7 @@ export async function fetchMyPlaylists(accessToken: string): Promise<SpotifyPlay
         id: p.id,
         name: p.name ?? '',
         imageUrl: p.images?.[0]?.url ?? null,
-        total: p.tracks?.total ?? 0,
+        total: p.items?.total ?? p.tracks?.total ?? 0,
         snapshotId: p.snapshot_id ?? '',
       });
     }
@@ -306,16 +309,18 @@ export interface PlaylistTrack {
 // Every playable track in a playlist, paginated 100 at a time. Local files and
 // podcast episodes are dropped (no spotify:track: URI → can't rate or shuffle
 // them). `fields` trims the payload to what we use.
+// Feb-2026 API: /playlists/{id}/tracks was replaced by /playlists/{id}/items,
+// and each entry's payload moved from `track` to `item` (legacy kept as fallback).
 export async function fetchPlaylistTracks(
   accessToken: string,
   playlistId: string,
 ): Promise<PlaylistTrack[]> {
   const fields = encodeURIComponent(
-    'next,items(track(uri,name,explicit,external_ids(isrc),artists(id,name)))',
+    'next,items(item(uri,name,explicit,external_ids(isrc),artists(id,name)))',
   );
   const out: PlaylistTrack[] = [];
   let url: string | null =
-    `https://api.spotify.com/v1/playlists/${playlistId}/tracks?limit=100&fields=${fields}`;
+    `https://api.spotify.com/v1/playlists/${playlistId}/items?limit=100&fields=${fields}`;
   while (url) {
     const res: Response = await fetch(url, {
       headers: { Authorization: `Bearer ${accessToken}` },
@@ -323,20 +328,19 @@ export async function fetchPlaylistTracks(
     if (!res.ok) {
       throw new SpotifyApiError(res.status, `Spotify playlist tracks failed: ${res.status}`);
     }
+    type ItemTrack = {
+      uri?: string;
+      name?: string;
+      explicit?: boolean;
+      external_ids?: { isrc?: string } | null;
+      artists?: { id?: string; name?: string }[];
+    } | null;
     const json: {
       next?: string | null;
-      items?: {
-        track?: {
-          uri?: string;
-          name?: string;
-          explicit?: boolean;
-          external_ids?: { isrc?: string } | null;
-          artists?: { id?: string; name?: string }[];
-        } | null;
-      }[];
+      items?: { item?: ItemTrack; track?: ItemTrack }[];
     } = await res.json();
-    for (const item of json.items ?? []) {
-      const t = item?.track;
+    for (const entry of json.items ?? []) {
+      const t = entry?.item ?? entry?.track;
       if (!t?.uri || !t.uri.startsWith('spotify:track:')) continue;
       out.push({
         uri: t.uri,

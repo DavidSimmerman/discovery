@@ -27,7 +27,6 @@ vi.stubGlobal('fetch', fetchMock);
 import { ensureSavedTrack } from '../../src/lib/server/spotify-library';
 
 const URI = 'spotify:track:4iV5W9uYEdYUVa79Axb7Rh';
-const ID = '4iV5W9uYEdYUVa79Axb7Rh';
 
 beforeEach(() => {
   fetchMock.mockReset();
@@ -35,7 +34,7 @@ beforeEach(() => {
 });
 
 describe('ensureSavedTrack', () => {
-  it('saves the track when not already in Liked Songs', async () => {
+  it('saves the track via /me/library when not already in Liked Songs', async () => {
     fetchMock
       .mockResolvedValueOnce(new Response(JSON.stringify([false]), { status: 200 }))
       .mockResolvedValueOnce(new Response(null, { status: 200 }));
@@ -43,12 +42,25 @@ describe('ensureSavedTrack', () => {
     await ensureSavedTrack('u1', URI);
 
     const [containsUrl] = fetchMock.mock.calls[0] as [string];
-    expect(containsUrl).toBe(`https://api.spotify.com/v1/me/tracks/contains?ids=${ID}`);
+    expect(containsUrl).toBe(`https://api.spotify.com/v1/me/library/contains?uris=spotify%3Atrack%3A4iV5W9uYEdYUVa79Axb7Rh`);
 
     const [saveUrl, saveInit] = fetchMock.mock.calls[1] as [string, RequestInit];
-    expect(saveUrl).toBe('https://api.spotify.com/v1/me/tracks');
+    expect(saveUrl).toBe(`https://api.spotify.com/v1/me/library?uris=spotify%3Atrack%3A4iV5W9uYEdYUVa79Axb7Rh`);
     expect(saveInit.method).toBe('PUT');
-    expect(JSON.parse(saveInit.body as string)).toEqual({ ids: [ID] });
+  });
+
+  it('falls back to the JSON-body shape when the query shape 400s', async () => {
+    fetchMock
+      .mockResolvedValueOnce(new Response(JSON.stringify([false]), { status: 200 }))
+      .mockResolvedValueOnce(new Response('{"error":{"status":400}}', { status: 400 }))
+      .mockResolvedValueOnce(new Response(null, { status: 200 }));
+
+    await ensureSavedTrack('u1', URI);
+
+    const [fallbackUrl, fallbackInit] = fetchMock.mock.calls[2] as [string, RequestInit];
+    expect(fallbackUrl).toBe('https://api.spotify.com/v1/me/library');
+    expect(JSON.parse(fallbackInit.body as string)).toEqual({ uris: [URI] });
+    expect(updateSet).not.toHaveBeenCalled();
   });
 
   it('does NOT re-save when already liked (re-adding bumps added_at and reorders Liked Songs)', async () => {

@@ -18,7 +18,7 @@ const SCOPES = [
   'user-read-recently-played',
   'user-library-read',
   // Mirror 2+ star ratings into Liked Songs (user-initiated via the rating
-  // action; checked against /me/tracks/contains so we never re-add).
+  // action; checked against /me/library/contains so we never re-add).
   'user-library-modify',
   'user-top-read',
   // Shuffle sources: list the user's own playlists and read their tracks so a

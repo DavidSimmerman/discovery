@@ -11,7 +11,8 @@
 
 <script lang="ts">
   import { fade, fly } from 'svelte/transition';
-  import { Check } from '@lucide/svelte';
+  import { Check, Heart } from '@lucide/svelte';
+  import { isLikedSongs } from '$lib/liked';
 
   type Props = {
     playlists: PickerPlaylist[];
@@ -29,11 +30,16 @@
   let search = $state('');
 
   // Sorted by unrated desc (unknown counts sink below known ones) — "what's
-  // left to rate" is the headline signal of this picker.
+  // left to rate" is the headline signal of this picker. Liked Songs stays
+  // pinned to the top regardless.
   const visible = $derived(
     playlists
       .filter((p) => p.name.toLowerCase().includes(search.trim().toLowerCase()))
-      .toSorted((a, b) => (b.unrated ?? -1) - (a.unrated ?? -1)),
+      .toSorted(
+        (a, b) =>
+          Number(isLikedSongs(b.id)) - Number(isLikedSongs(a.id)) ||
+          (b.unrated ?? -1) - (a.unrated ?? -1),
+      ),
   );
 
   /** Portal to <body> to escape ancestor stacking contexts (same trick as
@@ -103,7 +109,11 @@
                   ? 'border border-purple-400/30 bg-purple-500/10'
                   : 'bg-white/[0.04] hover:bg-white/[0.08]'}"
               >
-                {#if p.imageUrl}
+                {#if isLikedSongs(p.id)}
+                  <div class="grid size-11 flex-shrink-0 place-items-center rounded-lg bg-gradient-to-br from-indigo-500 to-violet-300">
+                    <Heart class="size-5 fill-white text-white" />
+                  </div>
+                {:else if p.imageUrl}
                   <img src={p.imageUrl} alt="" class="size-11 flex-shrink-0 rounded-lg object-cover" />
                 {:else}
                   <div class="grid size-11 flex-shrink-0 place-items-center rounded-lg bg-gradient-to-br from-white/15 to-white/5 text-sm font-bold text-white/60">

@@ -349,34 +349,80 @@ export async function fetchPlaylistTracks(
     if (!res.ok) {
       throw new SpotifyApiError(res.status, `Spotify playlist tracks failed: ${res.status}`);
     }
-    type ItemTrack = {
-      uri?: string;
-      name?: string;
-      explicit?: boolean;
-      external_ids?: { isrc?: string } | null;
-      artists?: { id?: string; name?: string }[];
-    } | null;
     const json: {
       next?: string | null;
-      items?: { item?: ItemTrack; track?: ItemTrack }[];
+      items?: { item?: RawPlaylistTrack; track?: RawPlaylistTrack }[];
     } = await res.json();
     for (const entry of json.items ?? []) {
-      const t = entry?.item ?? entry?.track;
-      if (!t?.uri || !t.uri.startsWith('spotify:track:')) continue;
-      out.push({
-        uri: t.uri,
-        name: t.name ?? '',
-        artists: (t.artists ?? []).map((a: { id?: string; name?: string }) => ({
-          id: a.id ?? null,
-          name: a.name ?? '',
-        })),
-        explicit: Boolean(t.explicit),
-        isrc: t.external_ids?.isrc ?? null,
-      });
+      const t = toPlaylistTrack(entry?.item ?? entry?.track ?? null);
+      if (t) out.push(t);
     }
     url = json.next ?? null;
   }
   return out;
+}
+
+// Raw track payload shared by playlist entries and saved-tracks items.
+type RawPlaylistTrack = {
+  uri?: string;
+  name?: string;
+  explicit?: boolean;
+  external_ids?: { isrc?: string } | null;
+  artists?: { id?: string; name?: string }[];
+} | null;
+
+function toPlaylistTrack(t: RawPlaylistTrack): PlaylistTrack | null {
+  if (!t?.uri || !t.uri.startsWith('spotify:track:')) return null;
+  return {
+    uri: t.uri,
+    name: t.name ?? '',
+    artists: (t.artists ?? []).map((a) => ({ id: a.id ?? null, name: a.name ?? '' })),
+    explicit: Boolean(t.explicit),
+    isrc: t.external_ids?.isrc ?? null,
+  };
+}
+
+// The user's Liked Songs (saved-tracks library), paginated 50 at a time —
+// /v1/me/tracks caps `limit` at 50. Same PlaylistTrack shape as playlists so
+// the shuffle plumbing treats Liked Songs as just another source.
+// Requires user-library-read.
+export async function fetchSavedTracks(accessToken: string): Promise<PlaylistTrack[]> {
+  const out: PlaylistTrack[] = [];
+  let url: string | null = 'https://api.spotify.com/v1/me/tracks?limit=50';
+  while (url) {
+    const res: Response = await fetch(url, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!res.ok) {
+      throw new SpotifyApiError(res.status, `Spotify saved tracks failed: ${res.status}`);
+    }
+    const json: {
+      next?: string | null;
+      items?: { track?: RawPlaylistTrack }[];
+    } = await res.json();
+    for (const entry of json.items ?? []) {
+      const t = toPlaylistTrack(entry?.track ?? null);
+      if (t) out.push(t);
+    }
+    url = json.next ?? null;
+  }
+  return out;
+}
+
+// Cheap freshness probe for Liked Songs: saved tracks have no snapshot_id, so
+// `total` + the newest added_at (items come newest-first) stand in for one.
+// Misses only a same-instant add+remove pair — fine at our 60s snapshot TTL.
+export async function fetchSavedTracksProbe(
+  accessToken: string,
+): Promise<{ total: number; newestAddedAt: string }> {
+  const res = await fetch('https://api.spotify.com/v1/me/tracks?limit=1', {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok) {
+    throw new SpotifyApiError(res.status, `Spotify saved tracks probe failed: ${res.status}`);
+  }
+  const json: { total?: number; items?: { added_at?: string }[] } = await res.json();
+  return { total: json.total ?? 0, newestAddedAt: json.items?.[0]?.added_at ?? '' };
 }
 
 // Resolve a Last.fm (artist, title) pair to a Spotify track via /v1/search.

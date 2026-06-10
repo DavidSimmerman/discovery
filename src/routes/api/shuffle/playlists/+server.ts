@@ -4,15 +4,34 @@
 
 import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { fetchMyPlaylists, SpotifyApiError } from '$lib/server/spotify';
+import {
+  fetchMyPlaylists,
+  fetchSavedTracksProbe,
+  SpotifyApiError,
+} from '$lib/server/spotify';
 import { getValidAccessToken } from '$lib/server/tokens';
+import { LIKED_SONGS_ID, LIKED_SONGS_NAME } from '$lib/liked';
 
 export const GET: RequestHandler = async ({ locals }) => {
   if (!locals.user) throw error(401, 'not logged in');
   const token = await getValidAccessToken(locals.user.id);
 
   try {
-    const playlists = await fetchMyPlaylists(token.access_token);
+    const [playlists, liked] = await Promise.all([
+      fetchMyPlaylists(token.access_token),
+      // Liked Songs isn't a playlist; inject it, pinned first. Best-effort —
+      // a probe failure shouldn't take the real playlists down with it.
+      fetchSavedTracksProbe(token.access_token).catch(() => null),
+    ]);
+    if (liked) {
+      playlists.unshift({
+        id: LIKED_SONGS_ID,
+        name: LIKED_SONGS_NAME,
+        imageUrl: null,
+        total: liked.total,
+        snapshotId: `liked:${liked.total}:${liked.newestAddedAt}`,
+      });
+    }
     return json({ playlists });
   } catch (e) {
     // 403 = playlist-read scopes not granted yet (token predates them). The

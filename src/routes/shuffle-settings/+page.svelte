@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import { ArrowLeft, Ban, Check, Library, Plus, Sparkles, X } from '@lucide/svelte';
+  import { ArrowLeft, Ban, Check, Heart, Library, Plus, Sparkles, X } from '@lucide/svelte';
+  import { isLikedSongs } from '$lib/liked';
   import PlaylistPickerSheet, {
     type PickerPlaylist,
   } from '$lib/components/PlaylistPickerSheet.svelte';
@@ -905,7 +906,11 @@
           class="rounded-2xl border border-purple-400/40 bg-purple-500/[0.07] p-3"
         >
           <div class="flex items-center gap-3">
-            {#if cat?.imageUrl}
+            {#if isLikedSongs(p.id)}
+              <div class="grid size-10 flex-shrink-0 place-items-center rounded-lg bg-gradient-to-br from-indigo-500 to-violet-300">
+                <Heart class="size-4.5 fill-white text-white" />
+              </div>
+            {:else if cat?.imageUrl}
               <img src={cat.imageUrl} alt="" class="size-10 flex-shrink-0 rounded-lg object-cover" />
             {:else}
               <div class="grid size-10 flex-shrink-0 place-items-center rounded-lg bg-gradient-to-br from-white/15 to-white/5 text-sm font-bold text-white/60">

@@ -117,3 +117,35 @@ test('deselecting every source disables the shuffle button', async ({ page }) =>
   await page.getByTestId('source-library').click();
   await expect(page.getByTestId('shuffle-cta')).toBeDisabled();
 });
+
+test('Liked Songs is pinned first in the picker and selectable like a playlist', async ({
+  page,
+}) => {
+  const LIKED = { id: '__liked__', name: 'Liked Songs', imageUrl: null, total: 250 };
+  const LIKED_STATS = { total: 250, rated: 100, unrated: 150 };
+  // Server injects Liked Songs first; the mock mirrors that contract. The
+  // real playlist has more unrated (so without pinning it would sort first).
+  await page.route('**/api/shuffle/playlists', (route) =>
+    route.fulfill({ json: { playlists: [LIKED, { ...PLAYLIST, total: 500 }] } }),
+  );
+  await page.route('**/api/shuffle/playlists/__liked__/stats', (route) =>
+    route.fulfill({ json: LIKED_STATS }),
+  );
+  await page.route(`**/api/shuffle/playlists/${PLAYLIST.id}/stats`, (route) =>
+    route.fulfill({ json: { total: 500, rated: 10, unrated: 490 } }),
+  );
+
+  await page.goto('/shuffle-settings');
+  await page.getByTestId('add-playlist').click();
+
+  const options = page.getByTestId('playlist-picker-option');
+  await expect(options.first()).toContainText('Liked Songs');
+  await expect(options.first()).toContainText('150 unrated · 250 total');
+
+  await options.first().click();
+  await page.getByRole('button', { name: 'Done' }).click();
+
+  const card = page.getByTestId('source-playlist');
+  await expect(card).toContainText('Liked Songs');
+  await expect(card).toContainText('150 unrated of 250');
+});

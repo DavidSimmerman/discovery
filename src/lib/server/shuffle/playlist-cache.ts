@@ -14,7 +14,14 @@
 // Single-process cache (the app runs as one Node instance). If that changes,
 // swap the Map for a real store; the call shape stays the same.
 
-import { fetchPlaylistTracks, SpotifyApiError, type PlaylistTrack } from '$lib/server/spotify';
+import {
+  fetchPlaylistTracks,
+  fetchSavedTracks,
+  fetchSavedTracksProbe,
+  SpotifyApiError,
+  type PlaylistTrack,
+} from '$lib/server/spotify';
+import { isLikedSongs } from '$lib/liked';
 
 type Entry = { tracks: PlaylistTrack[]; cachedAt: number };
 
@@ -40,7 +47,9 @@ export async function getPlaylistTracksCached(
     return hit.tracks;
   }
 
-  const tracks = await fetchPlaylistTracks(accessToken, playlistId);
+  const tracks = isLikedSongs(playlistId)
+    ? await fetchSavedTracks(accessToken)
+    : await fetchPlaylistTracks(accessToken, playlistId);
   cache.set(key, { tracks, cachedAt: now });
 
   // Drop this user's stale snapshots of the same playlist, then enforce the cap.
@@ -74,6 +83,14 @@ export async function getPlaylistSnapshotCached(
   const key = `${userId}:${playlistId}`;
   const hit = snapshots.get(key);
   if (hit && now - hit.cachedAt < SNAPSHOT_TTL_MS) return hit.snapshotId;
+
+  // Liked Songs has no snapshot_id; total + newest added_at stand in for one.
+  if (isLikedSongs(playlistId)) {
+    const probe = await fetchSavedTracksProbe(accessToken);
+    const snapshotId = `liked:${probe.total}:${probe.newestAddedAt}`;
+    snapshots.set(key, { snapshotId, cachedAt: now });
+    return snapshotId;
+  }
 
   const res = await fetch(
     `https://api.spotify.com/v1/playlists/${playlistId}?fields=snapshot_id`,

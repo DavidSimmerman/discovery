@@ -10,10 +10,14 @@
 //   5. ReccoBeats audio-features (cache-or-fetch)
 //   6. MusicBrainz by ISRC → track_works + track_credits (+ work credits if mbid present)
 //   7. (top-rated tracks only) Last.fm similars → resolve to URIs → track_similars
-//   8. (primary artist only, once per artist) /v1/artists/{id}/top-tracks → tracks cache
+//
+// (A former step 8 — Spotify artist top-tracks cache seeding — was removed when
+// Spotify dropped GET /artists/{id}/top-tracks in Feb 2026. The user-facing
+// "Top unrated by artist" feature is Last.fm-driven and unaffected.)
 //
 // Rate-limit notes:
-//   - Spotify: batched in 50s; cheap.
+//   - Spotify: single-resource GETs in a small pool (batch endpoints were
+//     removed Feb 2026); 429s retried per Retry-After inside spotify.ts.
 //   - ReccoBeats: batched in 40s; unauthenticated, best-effort.
 //   - MusicBrainz: 1 req/s serialized via providers/musicbrainz.ts.
 //   - Last.fm: untracked; coverage is patchy on indie so failures are normal.
@@ -32,7 +36,6 @@ import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import {
   fetchTracks,
   fetchArtists,
-  fetchArtistTopTracks,
   searchTrack,
   idFromUri,
   type SpotifyTrack,
@@ -108,15 +111,12 @@ export async function enrichUserLibrary(
     const candidateUris = await unenrichedUrisForUser(userId, opts.limit);
     const ratingByUri = await ratingsForUris(userId, candidateUris);
 
-    // Per-artist top-tracks fetched at most once per run.
-    const topTracksFetched = new Set<string>();
-
     let processed = 0;
     let failed = 0;
     for (let i = 0; i < candidateUris.length; i += BATCH_SIZE) {
       const batch = candidateUris.slice(i, i + BATCH_SIZE);
       try {
-        await enrichBatch(userId, accessToken, batch, ratingByUri, topTracksFetched, opts);
+        await enrichBatch(userId, accessToken, batch, ratingByUri, opts);
         processed += batch.length;
       } catch (err) {
         console.warn('[enrichment] batch failed', err);
@@ -160,14 +160,13 @@ async function enrichBatch(
   accessToken: string,
   uris: string[],
   ratingByUri: Map<string, number>,
-  topTracksFetched: Set<string>,
   opts: EnrichOptions,
 ): Promise<void> {
-  // Step 1: pull full Spotify track payloads (batched).
+  // Step 1: pull full Spotify track payloads (pooled single GETs).
   const spotifyTracks = await fetchTracks(accessToken, uris);
   if (spotifyTracks.length === 0) return;
 
-  // Step 2: gather every artist id we need, batch-fetch artists, persist.
+  // Step 2: gather every artist id we need, fetch artists, persist.
   const artistIds = Array.from(
     new Set(
       spotifyTracks.flatMap((t) => t.artists.map((a) => a.id).filter((x): x is string => !!x)),
@@ -297,18 +296,6 @@ async function enrichBatch(
       await enrichSimilars(accessToken, t);
     } catch (err) {
       console.warn('[enrichment] similars failed', t.uri, err);
-    }
-  }
-
-  // Step 8: artist top-tracks (once per primary artist, basic cache only).
-  for (const t of spotifyTracks) {
-    const artistId = t.artists[0]?.id;
-    if (!artistId || topTracksFetched.has(artistId)) continue;
-    topTracksFetched.add(artistId);
-    try {
-      await cacheArtistTopTracks(accessToken, artistId);
-    } catch (err) {
-      console.warn('[enrichment] artist top-tracks failed', artistId, err);
     }
   }
 }
@@ -493,28 +480,6 @@ async function enrichSimilars(accessToken: string, t: SpotifyTrack): Promise<voi
         spotifyTrackUri: t.uri,
         similarUri: r.track.uri,
         matchScore: r.match,
-      })),
-    )
-    .onConflictDoNothing();
-}
-
-async function cacheArtistTopTracks(accessToken: string, artistId: string): Promise<void> {
-  const top = await fetchArtistTopTracks(accessToken, artistId);
-  if (top.length === 0) return;
-
-  // Basic upsert only — these are seed candidates, not necessarily rated by the
-  // user. Full enrichment happens if/when the user rates one.
-  await db
-    .insert(tracks)
-    .values(
-      top.map((t) => ({
-        spotifyTrackUri: t.uri,
-        isrc: t.external_ids?.isrc ?? null,
-        title: t.name,
-        artists: t.artists.map((a) => a.name),
-        album: t.album?.name ?? null,
-        albumArtUrl: largestAlbumArtUrl(t),
-        durationMs: t.duration_ms,
       })),
     )
     .onConflictDoNothing();

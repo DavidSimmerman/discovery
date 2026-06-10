@@ -194,21 +194,6 @@ export async function fetchArtists(
     .map((a) => ({ id: a.id, name: a.name, genres: a.genres ?? [] }));
 }
 
-// Artist top tracks. `market` defaults to 'US' — Spotify requires a market param.
-export async function fetchArtistTopTracks(
-  accessToken: string,
-  artistId: string,
-  market = 'US',
-): Promise<SpotifyTrack[]> {
-  const res = await fetch(
-    `https://api.spotify.com/v1/artists/${artistId}/top-tracks?market=${market}`,
-    { headers: { Authorization: `Bearer ${accessToken}` } },
-  );
-  if (!res.ok) throw new Error(`Spotify artist top-tracks failed: ${res.status}`);
-  const json = await res.json();
-  return (json.tracks ?? []) as SpotifyTrack[];
-}
-
 // User's top artists/tracks. Spotify caps `limit` at 50; we only ever need 50.
 // `time_range` defaults to 'long_term' (several years), which is what we want
 // for a durable "top artists" view rather than a recency-biased one.

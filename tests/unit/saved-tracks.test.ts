@@ -46,7 +46,7 @@ const saved = (uri: string, addedAt = '2026-06-01T00:00:00Z') => ({
 });
 
 describe('fetchSavedTracks', () => {
-  it('pages /v1/me/library at limit 50 and maps to PlaylistTrack', async () => {
+  it('pages /v1/me/library at the Feb-2026 limit cap (20) and maps to PlaylistTrack', async () => {
     mockFetch([
       {
         next: 'https://api.spotify.com/v1/me/library?type=track&offset=50&limit=50',
@@ -58,7 +58,8 @@ describe('fetchSavedTracks', () => {
     const first = new URL(calls[0]);
     expect(first.pathname).toBe('/v1/me/library');
     expect(first.searchParams.get('type')).toBe('track');
-    expect(first.searchParams.get('limit')).toBe('50');
+    // Feb-2026 shrank limits across endpoints; /me/library is capped at 20.
+    expect(first.searchParams.get('limit')).toBe('20');
     expect(out).toEqual([
       {
         uri: 'spotify:track:aaaaaaaaaaaaaaaaaaaaaa',

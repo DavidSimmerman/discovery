@@ -445,12 +445,16 @@ async function fetchFirstSavedPage(
     savedTracksUrlIndex != null ? [SAVED_TRACKS_URLS[savedTracksUrlIndex]] : SAVED_TRACKS_URLS;
   const tried: string[] = [];
   for (const base of candidates) {
+    // Feb-2026 shrank max limits across endpoints (search 50→10, contains 40,
+    // PUT ids 20) — cap /me/library requests at 20 in case limit=50 is itself
+    // the rejection; the legacy endpoint keeps its documented 50.
+    const effLimit = base.includes('/me/library') ? Math.min(limit, 20) : limit;
     // Inline transient retry (429/5xx) per candidate, mirroring
     // fetchPageWithRetry — but 4xx must fall through to the next candidate
     // instead of throwing, so we can't reuse it directly.
     let res: Response;
     for (let attempt = 0; ; attempt++) {
-      res = await fetch(`${base}${base.includes('?') ? '&' : '?'}limit=${limit}`, {
+      res = await fetch(`${base}${base.includes('?') ? '&' : '?'}limit=${effLimit}`, {
         headers: { Authorization: `Bearer ${accessToken}` },
       });
       const transient = res.status === 429 || res.status >= 500;

@@ -85,6 +85,13 @@
       "when": 1781127132388,
       "tag": "0011_plays_dedupe_index",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1781130716069,
+      "tag": "0012_playlist_track_cache",
+      "breakpoints": true
     }
   ]
 }

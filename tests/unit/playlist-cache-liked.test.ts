@@ -18,6 +18,17 @@ vi.mock('$lib/server/spotify', () => ({
   },
 }));
 
+vi.mock('$lib/server/db', () => ({
+  db: {
+    insert: () => ({
+      values: () => ({ onConflictDoUpdate: () => Promise.resolve() }),
+    }),
+    select: () => ({
+      from: () => ({ where: () => ({ limit: async () => [] }) }),
+    }),
+  },
+}));
+
 import {
   getPlaylistTracksCached,
   getPlaylistSnapshotCached,

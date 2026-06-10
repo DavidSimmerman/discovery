@@ -23,6 +23,9 @@ import {
   type PlaylistTrack,
 } from '$lib/server/spotify';
 import { isLikedSongs } from '$lib/liked';
+import { db } from '$lib/server/db';
+import { playlistTrackCache } from '$lib/server/db/schema';
+import { and, eq } from 'drizzle-orm';
 
 type Entry = { tracks: PlaylistTrack[]; cachedAt: number };
 
@@ -57,7 +60,7 @@ export async function getPlaylistTracksCached(
     // Stale-on-error: Spotify is flaking (503 bursts) — any cached snapshot of
     // this playlist beats failing the caller. Snapshot mismatch just means the
     // data is minutes-to-hours old, which stats/shuffle can absorb.
-    const stale = newestEntryFor(userId, playlistId, now);
+    const stale = newestEntryFor(userId, playlistId, now) ?? (await dbCachedTracks(userId, playlistId));
     if (stale) {
       console.warn('[playlistCache] serving stale tracks after fetch failure', {
         playlistId,
@@ -68,6 +71,19 @@ export async function getPlaylistTracksCached(
     throw e;
   }
   cache.set(key, { tracks, cachedAt: now });
+  // Liked Songs also persists to the DB: the in-memory cache dies on every
+  // deploy, and Spotify's saved-tracks listing is currently too flaky to
+  // recrawl on demand. Fire-and-forget — a cache write must never fail a read.
+  if (isLikedSongs(playlistId)) {
+    void db
+      .insert(playlistTrackCache)
+      .values({ userId, playlistId, snapshotId, tracks, cachedAt: new Date(now) })
+      .onConflictDoUpdate({
+        target: [playlistTrackCache.userId, playlistTrackCache.playlistId],
+        set: { snapshotId, tracks, cachedAt: new Date(now) },
+      })
+      .catch((err) => console.error('[playlistCache] persist failed', { playlistId, err }));
+  }
 
   // Drop this user's stale snapshots of the same playlist, then enforce the cap.
   for (const k of cache.keys()) {
@@ -80,6 +96,39 @@ export async function getPlaylistTracksCached(
   }
 
   return tracks;
+}
+
+// Persistent fallback (survives deploys). 7-day cap: beyond that, stale liked
+// songs are more confusing than an honest error.
+const DB_STALE_MAX_MS = 7 * 24 * 3600_000;
+async function dbCachedTracks(userId: string, playlistId: string): Promise<PlaylistTrack[] | null> {
+  try {
+    const rows = await db
+      .select()
+      .from(playlistTrackCache)
+      .where(and(eq(playlistTrackCache.userId, userId), eq(playlistTrackCache.playlistId, playlistId)))
+      .limit(1);
+    const row = rows[0];
+    if (!row || Date.now() - row.cachedAt.getTime() > DB_STALE_MAX_MS) return null;
+    return row.tracks as PlaylistTrack[];
+  } catch {
+    return null;
+  }
+}
+
+async function dbCachedSnapshot(userId: string, playlistId: string): Promise<string | null> {
+  try {
+    const rows = await db
+      .select({ snapshotId: playlistTrackCache.snapshotId, cachedAt: playlistTrackCache.cachedAt })
+      .from(playlistTrackCache)
+      .where(and(eq(playlistTrackCache.userId, userId), eq(playlistTrackCache.playlistId, playlistId)))
+      .limit(1);
+    const row = rows[0];
+    if (!row || Date.now() - row.cachedAt.getTime() > DB_STALE_MAX_MS) return null;
+    return row.snapshotId;
+  } catch {
+    return null;
+  }
 }
 
 // Newest cached track list for a playlist regardless of snapshot — the
@@ -101,7 +150,33 @@ function newestEntryFor(userId: string, playlistId: string, now: number): Playli
 // snapshot id proves the token can access the playlist, and the tracks cache
 // above trusts that proof.
 const SNAPSHOT_TTL_MS = 60_000;
+const SNAPSHOT_SWR_MAX_MS = 3600_000;
 const snapshots = new Map<string, { snapshotId: string; cachedAt: number }>();
+const snapshotRefreshing = new Set<string>();
+
+async function refreshSnapshot(
+  accessToken: string,
+  userId: string,
+  playlistId: string,
+  key: string,
+): Promise<void> {
+  try {
+    if (isLikedSongs(playlistId)) {
+      const probe = await fetchSavedTracksProbe(accessToken);
+      snapshots.set(key, { snapshotId: `liked:${probe.total}:${probe.newestAddedAt}`, cachedAt: Date.now() });
+      return;
+    }
+    const res = await fetchPageWithRetry(
+      `https://api.spotify.com/v1/playlists/${playlistId}?fields=snapshot_id`,
+      accessToken,
+      'playlist snapshot',
+    );
+    const json: { snapshot_id?: string } = await res.json();
+    snapshots.set(key, { snapshotId: json.snapshot_id ?? '', cachedAt: Date.now() });
+  } catch {
+    /* keep the stale entry; next SWR window retries */
+  }
+}
 
 export async function getPlaylistSnapshotCached(
   accessToken: string,
@@ -112,6 +187,20 @@ export async function getPlaylistSnapshotCached(
   const key = `${userId}:${playlistId}`;
   const hit = snapshots.get(key);
   if (hit && now - hit.cachedAt < SNAPSHOT_TTL_MS) return hit.snapshotId;
+
+  // Stale-while-revalidate: with Spotify currently 503-bursting, a blocking
+  // re-probe (with retries) per stats call is what made the sources panel
+  // crawl. A known-but-expired snapshot (≤1h) answers instantly; the refresh
+  // happens in the background for the next caller.
+  if (hit && now - hit.cachedAt < SNAPSHOT_SWR_MAX_MS) {
+    if (!snapshotRefreshing.has(key)) {
+      snapshotRefreshing.add(key);
+      void refreshSnapshot(accessToken, userId, playlistId, key).finally(() =>
+        snapshotRefreshing.delete(key),
+      );
+    }
+    return hit.snapshotId;
+  }
 
   try {
     // Liked Songs has no snapshot_id; total + newest added_at stand in for one.
@@ -141,6 +230,13 @@ export async function getPlaylistSnapshotCached(
         status: e instanceof SpotifyApiError ? e.status : null,
       });
       return hit.snapshotId;
+    }
+    // Cold process (post-deploy) → the persistent copy still lets us serve.
+    const fromDb = await dbCachedSnapshot(userId, playlistId);
+    if (fromDb != null) {
+      console.warn('[playlistCache] serving DB snapshot after probe failure', { playlistId });
+      snapshots.set(key, { snapshotId: fromDb, cachedAt: now - SNAPSHOT_TTL_MS }); // expired → SWR refresh soon
+      return fromDb;
     }
     throw e;
   }

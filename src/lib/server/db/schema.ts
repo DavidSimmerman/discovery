@@ -199,6 +199,24 @@ export const plays = pgTable(
   ],
 );
 
+// Persistent copy of a playlist's resolved track list (today: only the
+// Liked Songs pseudo-playlist writes here). In-memory snapshot caches die on
+// every deploy; this row survives, so stats/shuffle can serve a stale-but-
+// real list through Spotify 503 bursts instead of reading 0 tracks.
+export const playlistTrackCache = pgTable(
+  'playlist_track_cache',
+  {
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    playlistId: text('playlist_id').notNull(),
+    snapshotId: text('snapshot_id').notNull(),
+    tracks: jsonb('tracks').notNull(), // PlaylistTrack[]
+    cachedAt: timestamp('cached_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.userId, table.playlistId] })],
+);
+
 // ReccoBeats audio-features cache. One row per Spotify URI. Raw values from the provider;
 // normalization (tempo→[0,1], loudness→[0,1]) happens at read time in the sampler.
 export const trackFeatures = pgTable('track_features', {

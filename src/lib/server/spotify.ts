@@ -332,8 +332,12 @@ export async function fetchPlaylistTracks(
   accessToken: string,
   playlistId: string,
 ): Promise<PlaylistTrack[]> {
+  // Both shapes requested: `item` (Feb-2026) and `track` (legacy) — Spotify's
+  // fields filter silently omits whichever the payload doesn't have, so the
+  // runtime fallback below stays reachable during any transition window.
   const fields = encodeURIComponent(
-    'next,items(item(uri,name,explicit,external_ids(isrc),artists(id,name)))',
+    'next,items(item(uri,name,explicit,external_ids(isrc),artists(id,name)),' +
+      'track(uri,name,explicit,external_ids(isrc),artists(id,name)))',
   );
   const out: PlaylistTrack[] = [];
   let url: string | null =

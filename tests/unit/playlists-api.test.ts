@@ -83,12 +83,40 @@ describe('fetchPlaylistTracks — /items endpoint', () => {
     },
   });
 
-  it('calls /playlists/{id}/items with item-shaped fields', async () => {
+  it('calls /playlists/{id}/items requesting both item and legacy track shapes', async () => {
     mockFetch([page([])]);
     await fetchPlaylistTracks('tok', 'pl1');
     const u = new URL(calls[0]);
     expect(u.pathname).toBe('/v1/playlists/pl1/items');
-    expect(decodeURIComponent(u.searchParams.get('fields') ?? '')).toContain('items(item(');
+    const fields = decodeURIComponent(u.searchParams.get('fields') ?? '');
+    expect(fields).toContain('items(item(');
+    expect(fields).toContain('track(');
+  });
+
+  it('parses the legacy items[].track shape as a fallback', async () => {
+    mockFetch([
+      page([
+        {
+          track: {
+            uri: 'spotify:track:dddddddddddddddddddddd',
+            name: 'Legacy',
+            explicit: true,
+            external_ids: { isrc: 'US0000000001' },
+            artists: [{ id: 'a2', name: 'Old Artist' }],
+          },
+        },
+      ]),
+    ]);
+    const out = await fetchPlaylistTracks('tok', 'pl1');
+    expect(out).toEqual([
+      {
+        uri: 'spotify:track:dddddddddddddddddddddd',
+        name: 'Legacy',
+        artists: [{ id: 'a2', name: 'Old Artist' }],
+        explicit: true,
+        isrc: 'US0000000001',
+      },
+    ]);
   });
 
   it('parses items[].item and keeps only spotify:track: URIs', async () => {

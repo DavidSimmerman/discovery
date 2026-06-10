@@ -127,7 +127,12 @@ export async function autoEnrichIfBehind(
     lastAutoEnrichAt.set(userId, now);
 
     const backlog = await deps.backlogProbe(userId);
-    if (backlog.length === 0) return false;
+    if (backlog.length === 0) {
+      // Nothing to do — release the stamp so the next rating (which creates
+      // backlog) can kick immediately instead of waiting out the cooldown.
+      lastAutoEnrichAt.delete(userId);
+      return false;
+    }
 
     const { access_token } = await deps.token(userId);
     void deps.run(userId, access_token).catch((err) => {

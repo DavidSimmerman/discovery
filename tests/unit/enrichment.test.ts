@@ -144,6 +144,15 @@ describe('autoEnrichIfBehind', () => {
     expect(d.run).not.toHaveBeenCalled();
   });
 
+  it('an empty probe does NOT start the cooldown — a fresh rating kicks immediately', async () => {
+    const probe = vi.fn(async () => [] as string[]);
+    const d = deps({ backlogProbe: probe });
+    await autoEnrichIfBehind('u1', T0, d); // fully enriched: no run, no cooldown
+    probe.mockResolvedValue(['spotify:track:new']); // user rates a new track
+    await expect(autoEnrichIfBehind('u1', T0 + 1_000, d)).resolves.toBe(true);
+    expect(d.run).toHaveBeenCalledTimes(1);
+  });
+
   it('debounces within the cooldown window, per user', async () => {
     const d = deps();
     await autoEnrichIfBehind('u1', T0, d);

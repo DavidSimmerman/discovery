@@ -132,46 +132,66 @@ export function idFromUri(uri: string): string {
   return m ? m[1] : uri;
 }
 
-// Batch /v1/tracks — up to 50 ids per call. Returns tracks in input order; nulls dropped.
+// Feb-2026 API: the batch endpoints (GET /tracks?ids=, GET /artists?ids=) were
+// removed. We fan out single-resource GETs instead — bounded concurrency so a
+// big enrichment run doesn't slam the rate limiter, 429s retried after
+// Retry-After, 404s skipped (parity with the old null-dropping batch behavior).
+const SINGLE_FETCH_CONCURRENCY = 4;
+const MAX_429_RETRIES = 3;
+
+// GET one resource; null on 404, retry on 429, throw otherwise.
+async function fetchOneJson(url: string, accessToken: string): Promise<unknown | null> {
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+    if (res.status === 404) return null;
+    if (res.status === 429 && attempt < MAX_429_RETRIES) {
+      const after = Number(res.headers.get('Retry-After') ?? '1');
+      await new Promise((r) => setTimeout(r, (Number.isFinite(after) ? after : 1) * 1000));
+      continue;
+    }
+    if (!res.ok) throw new Error(`Spotify ${new URL(url).pathname} failed: ${res.status}`);
+    return res.json();
+  }
+}
+
+// Run `fn` over `items` with a small worker pool; results keep input order.
+async function mapPooled<T, R>(items: T[], fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(SINGLE_FETCH_CONCURRENCY, items.length) }, async () => {
+      for (let i = next++; i < items.length; i = next++) {
+        out[i] = await fn(items[i]);
+      }
+    }),
+  );
+  return out;
+}
+
+// Tracks by URI/id, one GET /v1/tracks/{id} each. Input order kept; missing dropped.
 export async function fetchTracks(
   accessToken: string,
   uris: string[],
 ): Promise<SpotifyTrack[]> {
   if (uris.length === 0) return [];
-  const out: SpotifyTrack[] = [];
-  for (let i = 0; i < uris.length; i += 50) {
-    const ids = uris.slice(i, i + 50).map(idFromUri).join(',');
-    const res = await fetch(`https://api.spotify.com/v1/tracks?ids=${ids}`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-    if (!res.ok) throw new Error(`Spotify /tracks failed: ${res.status}`);
-    const json = await res.json();
-    for (const t of json.tracks ?? []) {
-      if (t) out.push(t as SpotifyTrack);
-    }
-  }
-  return out;
+  const results = await mapPooled(uris, (uri) =>
+    fetchOneJson(`https://api.spotify.com/v1/tracks/${idFromUri(uri)}`, accessToken),
+  );
+  return results.filter((t): t is SpotifyTrack => t != null);
 }
 
-// Batch /v1/artists — up to 50 ids per call. Returns artists; nulls dropped.
+// Artists by id, one GET /v1/artists/{id} each. Input order kept; missing dropped.
 export async function fetchArtists(
   accessToken: string,
   artistIds: string[],
 ): Promise<SpotifyArtist[]> {
   if (artistIds.length === 0) return [];
-  const out: SpotifyArtist[] = [];
-  for (let i = 0; i < artistIds.length; i += 50) {
-    const ids = artistIds.slice(i, i + 50).join(',');
-    const res = await fetch(`https://api.spotify.com/v1/artists?ids=${ids}`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-    if (!res.ok) throw new Error(`Spotify /artists failed: ${res.status}`);
-    const json = await res.json();
-    for (const a of json.artists ?? []) {
-      if (a) out.push({ id: a.id, name: a.name, genres: a.genres ?? [] });
-    }
-  }
-  return out;
+  const results = await mapPooled(artistIds, (id) =>
+    fetchOneJson(`https://api.spotify.com/v1/artists/${id}`, accessToken),
+  );
+  return results
+    .filter((a): a is { id: string; name: string; genres?: string[] } => a != null)
+    .map((a) => ({ id: a.id, name: a.name, genres: a.genres ?? [] }));
 }
 
 // Artist top tracks. `market` defaults to 'US' — Spotify requires a market param.

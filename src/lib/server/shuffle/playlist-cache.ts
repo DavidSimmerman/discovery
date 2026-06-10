@@ -51,6 +51,14 @@ export async function getPlaylistTracksCached(
     return hit.tracks;
   }
 
+  // L2: persistent copy from a previous process. Snapshot match = exact hit —
+  // no Spotify call at all; this is what makes stats instant after a deploy.
+  const persisted = await dbCachedRow(userId, playlistId);
+  if (persisted && persisted.snapshotId === snapshotId) {
+    cache.set(key, { tracks: persisted.tracks, cachedAt: now });
+    return persisted.tracks;
+  }
+
   let tracks: PlaylistTrack[];
   try {
     tracks = isLikedSongs(playlistId)
@@ -71,10 +79,10 @@ export async function getPlaylistTracksCached(
     throw e;
   }
   cache.set(key, { tracks, cachedAt: now });
-  // Liked Songs also persists to the DB: the in-memory cache dies on every
-  // deploy, and Spotify's saved-tracks listing is currently too flaky to
-  // recrawl on demand. Fire-and-forget — a cache write must never fail a read.
-  if (isLikedSongs(playlistId)) {
+  // Persist every playlist's resolved list: the in-memory cache dies on every
+  // deploy, and Spotify is currently too flaky/slow to recrawl on demand.
+  // Fire-and-forget — a cache write must never fail a read.
+  {
     void db
       .insert(playlistTrackCache)
       .values({ userId, playlistId, snapshotId, tracks, cachedAt: new Date(now) })
@@ -101,7 +109,10 @@ export async function getPlaylistTracksCached(
 // Persistent fallback (survives deploys). 7-day cap: beyond that, stale liked
 // songs are more confusing than an honest error.
 const DB_STALE_MAX_MS = 7 * 24 * 3600_000;
-async function dbCachedTracks(userId: string, playlistId: string): Promise<PlaylistTrack[] | null> {
+async function dbCachedRow(
+  userId: string,
+  playlistId: string,
+): Promise<{ tracks: PlaylistTrack[]; snapshotId: string } | null> {
   try {
     const rows = await db
       .select()
@@ -110,10 +121,14 @@ async function dbCachedTracks(userId: string, playlistId: string): Promise<Playl
       .limit(1);
     const row = rows[0];
     if (!row || Date.now() - row.cachedAt.getTime() > DB_STALE_MAX_MS) return null;
-    return row.tracks as PlaylistTrack[];
+    return { tracks: row.tracks as PlaylistTrack[], snapshotId: row.snapshotId };
   } catch {
     return null;
   }
+}
+
+async function dbCachedTracks(userId: string, playlistId: string): Promise<PlaylistTrack[] | null> {
+  return (await dbCachedRow(userId, playlistId))?.tracks ?? null;
 }
 
 async function dbCachedSnapshot(userId: string, playlistId: string): Promise<string | null> {

@@ -47,7 +47,7 @@
     albumArtUrl: string | null;
   };
 
-  type SpotifyQueueItem = { uri: string; name: string | null; artists: string[] };
+  type SpotifyQueueItem = { uri: string; name: string | null; artists: string[]; albumArtUrl?: string | null };
 
   type TopUnratedTrack = {
     uri: string;
@@ -242,7 +242,7 @@
       spotifyQueue = (data.queue ?? []).filter((t) => t.uri);
       queueState = 'done';
       // Hydrate album art for any queue URIs we don't have yet.
-      const missing = spotifyQueue.map((t) => t.uri).filter((u) => !queueMeta.has(u));
+      const missing = spotifyQueue.filter((t) => !t.albumArtUrl && !queueMeta.has(t.uri)).map((t) => t.uri);
       if (missing.length > 0) void hydrateArt(missing);
     } catch (e) {
       if ((e as { name?: string })?.name === 'AbortError') return;
@@ -382,6 +382,7 @@
       <div class="flex flex-col gap-1" role="list" data-testid="queue-list">
         {#each spotifyQueue.slice(0, 30) as item, i (item.uri + ':' + i)}
           {@const meta = queueMeta.get(item.uri) ?? null}
+          {@const art = item.albumArtUrl ?? meta?.albumArtUrl ?? null}
           <div
             class="flex items-center gap-2 rounded-xl px-2 py-2 transition-colors hover:bg-white/[0.04]"
             role="listitem"
@@ -389,8 +390,8 @@
             data-uri={item.uri}
           >
             <span class="w-5 shrink-0 text-center text-[10px] font-semibold text-white/30">{i + 1}</span>
-            {#if meta?.albumArtUrl}
-              <img src={meta.albumArtUrl} alt="" class="size-9 shrink-0 rounded-md object-cover shadow shadow-black/40" />
+            {#if art}
+              <img src={art} alt="" class="size-9 shrink-0 rounded-md object-cover shadow shadow-black/40" />
             {:else}
               <div class="size-9 shrink-0 rounded-md bg-white/10"></div>
             {/if}

@@ -280,14 +280,29 @@ export interface SpotifyPlaylistSummary {
 // Requires playlist-read-private / playlist-read-collaborative scopes.
 // Feb-2026 API: the count moved from `tracks.total` to `items.total`; read the
 // new field first, keep the legacy one as a fallback.
+// One page GET with retries for transient upstream failures: 429 honors
+// Retry-After, 5xx backs off briefly — Spotify throws occasional 503s at
+// dev-mode apps and a single one shouldn't kill a whole listing.
+async function fetchPageWithRetry(url: string, accessToken: string, what: string): Promise<Response> {
+  const BACKOFF_MS = [500, 1500];
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+    const transient = res.status === 429 || res.status >= 500;
+    if (!transient || attempt >= BACKOFF_MS.length) {
+      if (!res.ok) throw new SpotifyApiError(res.status, `Spotify ${what} failed: ${res.status}`);
+      return res;
+    }
+    const after = Number(res.headers.get('Retry-After') ?? '');
+    const waitMs = res.status === 429 && Number.isFinite(after) ? after * 1000 : BACKOFF_MS[attempt];
+    await new Promise((r) => setTimeout(r, waitMs));
+  }
+}
+
 export async function fetchMyPlaylists(accessToken: string): Promise<SpotifyPlaylistSummary[]> {
   const out: SpotifyPlaylistSummary[] = [];
   let url: string | null = 'https://api.spotify.com/v1/me/playlists?limit=50';
   while (url) {
-    const res: Response = await fetch(url, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-    if (!res.ok) throw new SpotifyApiError(res.status, `Spotify /me/playlists failed: ${res.status}`);
+    const res: Response = await fetchPageWithRetry(url, accessToken, '/me/playlists');
     const json: {
       next?: string | null;
       items?: {

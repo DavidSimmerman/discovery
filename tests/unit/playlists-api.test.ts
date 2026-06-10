@@ -70,6 +70,43 @@ describe('fetchMyPlaylists — Feb-2026 shape', () => {
   });
 });
 
+describe('fetchMyPlaylists — transient failure retry', () => {
+  it('retries through a 503 and succeeds (with fake timers)', async () => {
+    vi.useFakeTimers();
+    let i = 0;
+    const responses = [
+      { ok: false, status: 503, headers: new Headers(), json: async () => ({}) },
+      {
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        json: async () => ({ next: null, items: [{ id: 'p1', name: 'P', snapshot_id: 's' }] }),
+      },
+    ];
+    vi.stubGlobal('fetch', vi.fn(async () => responses[Math.min(i++, 1)] as unknown as Response));
+
+    const promise = fetchMyPlaylists('tok');
+    await vi.runAllTimersAsync();
+    const out = await promise;
+    expect(out).toHaveLength(1);
+    expect(i).toBe(2);
+    vi.useRealTimers();
+  });
+
+  it('gives up after exhausting retries', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: false, status: 503, headers: new Headers(), json: async () => ({}) }) as unknown as Response),
+    );
+    const promise = fetchMyPlaylists('tok').catch((e) => e);
+    await vi.runAllTimersAsync();
+    const err = await promise;
+    expect(err).toMatchObject({ status: 503 });
+    vi.useRealTimers();
+  });
+});
+
 describe('fetchPlaylistTracks — /items endpoint', () => {
   const page = (items: unknown[], next: string | null = null) => ({ next, items });
   const item = (uri: string, over: Record<string, unknown> = {}) => ({

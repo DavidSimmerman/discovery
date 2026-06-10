@@ -29,6 +29,7 @@ describe('normalizeSettings', () => {
         library: false,
         playlists: [{ id: 'pl1', name: 'Imports', mode: 'unrated' }],
       },
+      filters: defaultSettings().filters,
       sampler: DEFAULT_SAMPLER_CONFIG,
     };
     expect(normalizeSettings(s)).toEqual(s);
@@ -141,7 +142,7 @@ describe('effectiveSamplerConfig', () => {
 });
 
 describe('mergeCandidates', () => {
-  const meta = { primaryArtistId: 'a1', genres: ['indie'], versionType: null };
+  const meta = { primaryArtistId: 'a1', genres: ['indie'], versionType: null, explicit: null };
   const pt = (uri: string, artistId = 'sp-artist', isrc: string | null = null): PlaylistTrack => ({
     uri,
     name: uri,
@@ -201,7 +202,7 @@ describe('mergeCandidates', () => {
       libraryRows: [],
       playlists: [{ mode: 'unrated', tracks: [pt('t:known')] }],
       ratingByUri: new Map(),
-      metaByUri: new Map([['t:known', { primaryArtistId: 'a9', genres: ['folk'], versionType: 'live' }]]),
+      metaByUri: new Map([['t:known', { primaryArtistId: 'a9', genres: ['folk'], versionType: 'live', explicit: null }]]),
     });
     expect(out[0].artistIds).toEqual(['a9']);
     expect(out[0].genres).toEqual(['folk']);

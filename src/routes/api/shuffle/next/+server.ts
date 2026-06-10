@@ -44,7 +44,7 @@ export const POST: RequestHandler = async ({ locals }) => {
 
   return await withUserSessionLock(userId, async (tx) => {
     const [candidates, state] = await Promise.all([
-      loadCandidates(tx, userId, settings.sources, prefetched),
+      loadCandidates(tx, userId, settings, prefetched),
       loadSessionState(tx, userId, now),
     ]);
 
@@ -52,7 +52,7 @@ export const POST: RequestHandler = async ({ locals }) => {
       return json({ uri: null, reason: 'no candidates for the configured sources' }, { status: 200 });
     }
 
-    const config = effectiveSamplerConfig(settings, poolSides(settings.sources));
+    const config = effectiveSamplerConfig(settings, poolSides(settings.sources, settings.filters.rating.mode));
     const result = pickNext({ candidates, state, config, now, rng: Math.random });
 
     if (result.uri) {

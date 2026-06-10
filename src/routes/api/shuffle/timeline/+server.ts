@@ -192,7 +192,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
   const isForward = body.action === 'advance' || body.action === 'forward';
   const shouldRefill = isForward || body.action === 'sync';
   const settings = await loadUserSettings(db, userId);
-  const config = effectiveSamplerConfig(settings, poolSides(settings.sources));
+  const config = effectiveSamplerConfig(settings, poolSides(settings.sources, settings.filters.rating.mode));
   const prefetched = shouldRefill
     ? await (async () => {
         const token = await getValidAccessToken(userId).catch(() => null);
@@ -220,7 +220,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
     let candidatesCache: Candidate[] | null = null;
     async function getCandidates(): Promise<Candidate[]> {
       if (candidatesCache == null) {
-        candidatesCache = await loadCandidates(tx, userId, settings.sources, prefetched);
+        candidatesCache = await loadCandidates(tx, userId, settings, prefetched);
       }
       return candidatesCache;
     }

@@ -25,8 +25,31 @@ export type ShuffleSources = {
   playlists: PlaylistSource[];
 };
 
+// Hard include/exclude filters, applied as a candidate pre-filter (see
+// shuffle/filters.ts) — distinct from the sampler's soft 0–100 weighting.
+// include non-empty = "only these"; exclude always wins over include.
+// Entries carry display names so the settings UI doesn't need a lookup.
+export type FilterEntry = { id: string; name: string };
+
+export type RatingFilterMode = 'unrated' | 'rated' | 'both';
+
+export type ShuffleFilters = {
+  rating: {
+    mode: RatingFilterMode;
+    // Star range, applied to RATED candidates only (1..5, inclusive).
+    minStars: number;
+    maxStars: number;
+  };
+  artists: { include: FilterEntry[]; exclude: FilterEntry[] };
+  genres: { include: FilterEntry[]; exclude: FilterEntry[] };
+  labels: { include: FilterEntry[]; exclude: FilterEntry[] };
+  versionTypes: { exclude: string[] };
+  allowExplicit: boolean;
+};
+
 export type ShuffleSettings = {
   sources: ShuffleSources;
+  filters: ShuffleFilters;
   sampler: SamplerConfig;
 };
 
@@ -49,9 +72,21 @@ export const DEFAULT_SAMPLER_CONFIG: SamplerConfig = {
   },
 };
 
+export function defaultFilters(): ShuffleFilters {
+  return {
+    rating: { mode: 'both', minStars: 1, maxStars: 5 },
+    artists: { include: [], exclude: [] },
+    genres: { include: [], exclude: [] },
+    labels: { include: [], exclude: [] },
+    versionTypes: { exclude: [] },
+    allowExplicit: true,
+  };
+}
+
 export function defaultSettings(): ShuffleSettings {
   return {
     sources: { library: true, playlists: [] },
+    filters: defaultFilters(),
     sampler: structuredClone(DEFAULT_SAMPLER_CONFIG),
   };
 }
@@ -66,7 +101,11 @@ export function normalizeSettings(raw: unknown): ShuffleSettings {
 
   // Bare SamplerConfig: has sampler fields at the top level, no `sources`.
   if (!('sources' in obj) && 'mix' in obj && 'tierWeights' in obj) {
-    return { sources: { library: true, playlists: [] }, sampler: obj as SamplerConfig };
+    return {
+      sources: { library: true, playlists: [] },
+      filters: defaultFilters(),
+      sampler: obj as SamplerConfig,
+    };
   }
 
   const def = defaultSettings();
@@ -85,7 +124,54 @@ export function normalizeSettings(raw: unknown): ShuffleSettings {
       library: typeof sources.library === 'boolean' ? sources.library : def.sources.library,
       playlists,
     },
+    filters: normalizeFilters(obj.filters),
     sampler: isSamplerConfig(obj.sampler) ? obj.sampler : def.sampler,
+  };
+}
+
+// Per-field fold of a persisted/PUT filters blob — anything malformed drops to
+// its default rather than rejecting the whole settings object (same philosophy
+// as the playlists fold above: the stored blob must always be loadable).
+function normalizeFilters(raw: unknown): ShuffleFilters {
+  const def = defaultFilters();
+  if (raw == null || typeof raw !== 'object') return def;
+  const f = raw as Record<string, unknown>;
+
+  const entryList = (v: unknown): FilterEntry[] =>
+    Array.isArray(v)
+      ? v.filter(
+          (e): e is FilterEntry =>
+            e != null && typeof e.id === 'string' && typeof e.name === 'string',
+        )
+      : [];
+  const axis = (v: unknown): { include: FilterEntry[]; exclude: FilterEntry[] } => {
+    const a = (v ?? {}) as Record<string, unknown>;
+    return { include: entryList(a.include), exclude: entryList(a.exclude) };
+  };
+  const clampStars = (v: unknown, fallback: number): number =>
+    typeof v === 'number' && Number.isInteger(v) ? Math.max(1, Math.min(5, v)) : fallback;
+
+  const rating = (f.rating ?? {}) as Record<string, unknown>;
+  const mode: RatingFilterMode =
+    rating.mode === 'unrated' || rating.mode === 'rated' || rating.mode === 'both'
+      ? rating.mode
+      : def.rating.mode;
+  const minStars = clampStars(rating.minStars, def.rating.minStars);
+  const maxStars = clampStars(rating.maxStars, def.rating.maxStars);
+
+  const versionTypes = (f.versionTypes ?? {}) as Record<string, unknown>;
+
+  return {
+    rating: { mode, minStars: Math.min(minStars, maxStars), maxStars },
+    artists: axis(f.artists),
+    genres: axis(f.genres),
+    labels: axis(f.labels),
+    versionTypes: {
+      exclude: Array.isArray(versionTypes.exclude)
+        ? versionTypes.exclude.filter((v): v is string => typeof v === 'string')
+        : [],
+    },
+    allowExplicit: typeof f.allowExplicit === 'boolean' ? f.allowExplicit : def.allowExplicit,
   };
 }
 
@@ -119,7 +205,12 @@ export type PoolSides = {
   demandsUnrated: boolean;
 };
 
-export function poolSides(sources: ShuffleSources): PoolSides {
+// The global rating FILTER narrows what the sources offer: filtering to
+// "unrated" makes the surviving pool entirely unrated — and that's an explicit
+// ask, so the unrated side is demanded (and vice versa). Without folding the
+// filter in here, the stock mix (unratedPct: 0) would zero out a pool the user
+// filtered to unrated on purpose.
+export function poolSides(sources: ShuffleSources, ratingMode: RatingFilterMode = 'both'): PoolSides {
   const sides: PoolSides = {
     allowsRated: sources.library,
     allowsUnrated: false,
@@ -134,6 +225,13 @@ export function poolSides(sources: ShuffleSources): PoolSides {
     } else {
       sides.allowsRated = sides.allowsUnrated = true;
     }
+  }
+  if (ratingMode === 'unrated') {
+    sides.allowsRated = sides.demandsRated = false;
+    if (sides.allowsUnrated) sides.demandsUnrated = true;
+  } else if (ratingMode === 'rated') {
+    sides.allowsUnrated = sides.demandsUnrated = false;
+    if (sides.allowsRated) sides.demandsRated = true;
   }
   return sides;
 }

@@ -10,17 +10,19 @@
 //   mergeCandidates   — pure mode/dedupe rules, unit-testable in isolation.
 
 import { inArray, eq } from 'drizzle-orm';
-import { ratings, tracks } from '$lib/server/db/schema';
+import { ratings, trackLabels, tracks } from '$lib/server/db/schema';
 import type { PlaylistTrack } from '$lib/server/spotify';
 import { getPlaylistSnapshotCached, getPlaylistTracksCached } from './playlist-cache';
+import { applyFilters } from './filters';
 import { tierOf, type Candidate } from './sampler';
-import type { ShuffleSources, PlaylistSourceMode } from './config';
+import type { ShuffleSettings, ShuffleSources, PlaylistSourceMode } from './config';
 import type { DbExec } from './session-store';
 
 export type TrackMeta = {
   primaryArtistId: string | null;
   genres: string[] | null;
   versionType: string | null;
+  explicit: boolean | null;
 };
 
 export type PrefetchedPlaylists = {
@@ -81,6 +83,7 @@ export function mergeCandidates(args: {
     rating: number | null,
     meta: TrackMeta | null,
     artistIdsFallback: string[],
+    explicitFallback: boolean | null,
   ) => {
     if (seen.has(uri)) return;
     seen.add(uri);
@@ -91,11 +94,12 @@ export function mergeCandidates(args: {
       artistIds: meta?.primaryArtistId ? [meta.primaryArtistId] : artistIdsFallback,
       genres: meta?.genres ?? [],
       versionType: meta?.versionType ?? null,
+      explicit: meta?.explicit ?? explicitFallback,
     });
   };
 
   for (const r of args.libraryRows) {
-    push(r.uri, r.rating, r.meta, []);
+    push(r.uri, r.rating, r.meta, [], null);
   }
 
   for (const p of args.playlists) {
@@ -106,21 +110,22 @@ export function mergeCandidates(args: {
       if (p.mode === 'unrated' && rating != null) continue;
       if (p.mode === 'rated' && rating == null) continue;
       const artistIds = t.artists.map((a) => a.id).filter((id): id is string => id != null);
-      push(t.uri, rating, args.metaByUri.get(t.uri) ?? null, artistIds);
+      push(t.uri, rating, args.metaByUri.get(t.uri) ?? null, artistIds, t.explicit);
     }
   }
 
   return out;
 }
 
-// DB reads + assembly. Safe inside the session lock — no external IO; the
-// playlist track lists must already be prefetched.
+// DB reads + assembly + hard filters. Safe inside the session lock — no
+// external IO; the playlist track lists must already be prefetched.
 export async function loadCandidates(
-  tx: DbExec,
+  tx: Pick<DbExec, 'select'>,
   userId: string,
-  sources: ShuffleSources,
+  settings: Pick<ShuffleSettings, 'sources' | 'filters'>,
   prefetched: PrefetchedPlaylists,
 ): Promise<Candidate[]> {
+  const { sources, filters } = settings;
   // Library rows (also the rating lookup for playlist modes — one query).
   const ratedRows = await tx
     .select({
@@ -130,6 +135,7 @@ export async function loadCandidates(
       primaryArtistId: tracks.primaryArtistId,
       genres: tracks.genres,
       versionType: tracks.versionType,
+      explicit: tracks.explicit,
     })
     .from(ratings)
     .leftJoin(tracks, eq(tracks.spotifyTrackUri, ratings.spotifyTrackUri))
@@ -155,6 +161,7 @@ export async function loadCandidates(
         primaryArtistId: tracks.primaryArtistId,
         genres: tracks.genres,
         versionType: tracks.versionType,
+        explicit: tracks.explicit,
       })
       .from(tracks)
       .where(inArray(tracks.spotifyTrackUri, playlistUris));
@@ -163,11 +170,12 @@ export async function loadCandidates(
         primaryArtistId: m.primaryArtistId,
         genres: m.genres,
         versionType: m.versionType,
+        explicit: m.explicit,
       });
     }
   }
 
-  return mergeCandidates({
+  const merged = mergeCandidates({
     libraryRows: sources.library
       ? ratedRows.map((r) => ({
           uri: r.uri,
@@ -176,6 +184,7 @@ export async function loadCandidates(
             primaryArtistId: r.primaryArtistId,
             genres: r.genres,
             versionType: r.versionType,
+            explicit: r.explicit,
           },
         }))
       : [],
@@ -184,4 +193,22 @@ export async function loadCandidates(
     ratingByIsrc,
     metaByUri,
   });
+
+  // Label map only when a label filter is active — it's a per-user full scan
+  // of track_labels otherwise wasted.
+  let labelsByUri = new Map<string, string[]>();
+  if (filters.labels.include.length > 0 || filters.labels.exclude.length > 0) {
+    const rows = await tx
+      .select({ uri: trackLabels.spotifyTrackUri, labelId: trackLabels.labelId })
+      .from(trackLabels)
+      .where(eq(trackLabels.userId, userId));
+    labelsByUri = new Map();
+    for (const r of rows) {
+      const list = labelsByUri.get(r.uri);
+      if (list) list.push(r.labelId);
+      else labelsByUri.set(r.uri, [r.labelId]);
+    }
+  }
+
+  return applyFilters(merged, filters, labelsByUri);
 }

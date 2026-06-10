@@ -24,6 +24,9 @@ export type Candidate = {
   genres: string[];
   // 'original' | 'acoustic' | 'live' | 'remix' | ... | null when undetected
   versionType: string | null;
+  // null when unknown (track not yet enriched). Consumed by the hard filter
+  // layer (shuffle/filters.ts), not by the sampler itself.
+  explicit?: boolean | null;
 };
 
 export type SamplerState = {

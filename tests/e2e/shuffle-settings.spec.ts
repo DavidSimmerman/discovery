@@ -26,6 +26,20 @@ async function mockPlaylistApis(page: Page) {
   await page.route(`**/api/shuffle/playlists/${PLAYLIST.id}/stats`, (route) =>
     route.fulfill({ json: STATS }),
   );
+  // The CTA count comes from the preview-count endpoint, which can't fetch the
+  // mocked playlist server-side (the seeded user has no Spotify token).
+  // Emulate its math from the posted settings: library = the 4 seeded rated
+  // tracks, playlist contribution per mode from STATS.
+  await page.route('**/api/shuffle/preview-count', (route) => {
+    const body = route.request().postDataJSON() as {
+      settings: { sources: { library: boolean; playlists: { mode: string }[] } };
+    };
+    let count = body.settings.sources.library ? 4 : 0;
+    for (const p of body.settings.sources.playlists) {
+      count += p.mode === 'unrated' ? STATS.unrated : p.mode === 'rated' ? STATS.rated : STATS.total;
+    }
+    return route.fulfill({ json: { count } });
+  });
 }
 
 test.beforeEach(async ({ context, page }) => {

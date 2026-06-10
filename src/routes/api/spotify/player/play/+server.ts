@@ -3,7 +3,7 @@ import type { RequestHandler } from './$types';
 import { getValidAccessToken } from '$lib/server/tokens';
 import { mapSpotifyPlayError } from '$lib/playback/errors';
 
-interface UrisBody { uris: string[]; device_id?: string }
+interface UrisBody { uris: string[]; position_ms?: number; device_id?: string }
 interface ContextBody {
   context_uri: string;
   offset?: { uri: string } | { position: number };
@@ -30,8 +30,11 @@ export const PUT: RequestHandler = async ({ locals, request }) => {
   if (hasContext) {
     payload.context_uri = body.context_uri;
     if (body.offset) payload.offset = body.offset;
-    if (typeof body.position_ms === 'number') payload.position_ms = body.position_ms;
   }
+  // position_ms applies to BOTH payload shapes. The sampler's low-water
+  // re-push sends { uris, position_ms } to continue the current track at its
+  // offset — dropping it here restarted the song from 0 on every re-push.
+  if (typeof body.position_ms === 'number') payload.position_ms = body.position_ms;
 
   // device_id is optional: when absent, Spotify routes to whichever device the
   // user has marked active. Surfaces no_active_device (409) when nothing is.

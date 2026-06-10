@@ -56,6 +56,16 @@ describe('PUT /api/spotify/player/play', () => {
     expect((init.headers as Record<string, string>)['authorization']).toBe('Bearer tkn');
   });
 
+  it('forwards position_ms on a { uris } payload (sampler re-push must not restart the track)', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }));
+    await PUT(makeEvent({ uris: ['spotify:track:1', 'spotify:track:2'], position_ms: 83500 }));
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({
+      uris: ['spotify:track:1', 'spotify:track:2'],
+      position_ms: 83500,
+    });
+  });
+
   it('forwards { context_uri, offset, position_ms } payload', async () => {
     fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }));
     await PUT(

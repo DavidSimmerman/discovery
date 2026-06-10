@@ -106,11 +106,16 @@ test('shuffle CTA saves liked/unrated as the only shuffle source', async ({ page
   await page.getByTestId('liked-shuffle-cta').click();
   const req = await putSettings;
   const body = req.postDataJSON() as {
-    settings: { sources: { library: boolean; discovery: boolean; playlists: { id: string; mode: string }[] } };
+    settings: {
+      sources: { library: boolean; discovery: boolean; playlists: { id: string; mode: string }[] };
+      filters: { rating: { mode: string } };
+    };
   };
   expect(body.settings.sources.library).toBe(false);
   expect(body.settings.sources.discovery).toBe(false);
   expect(body.settings.sources.playlists).toEqual([
     { id: '__liked__', name: 'Liked Songs', mode: 'unrated' },
   ]);
+  // A leftover 'rated' filter would empty the unrated pool — must be reset.
+  expect(body.settings.filters.rating.mode).toBe('unrated');
 });

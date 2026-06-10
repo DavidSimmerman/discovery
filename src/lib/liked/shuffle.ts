@@ -19,6 +19,9 @@ export async function shuffleUnratedLiked(playback: SamplerStarter): Promise<boo
     discovery: false,
     playlists: [{ id: LIKED_SONGS_ID, name: LIKED_SONGS_NAME, mode: 'unrated' }],
   };
+  // A leftover global rating filter of 'rated' would empty an unrated-only
+  // pool — make the filter agree with the source.
+  settings.filters.rating = { ...settings.filters.rating, mode: 'unrated' };
 
   const put = await fetch('/api/shuffle/settings', {
     method: 'PUT',

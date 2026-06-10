@@ -1,6 +1,6 @@
 import { redirect, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { exchangeCode, fetchSpotifyMe } from '$lib/server/spotify';
+import { exchangeCode, fetchSpotifyMe, normalizeProduct } from '$lib/server/spotify';
 import { db } from '$lib/server/db';
 import { users, spotifyTokens } from '$lib/server/db/schema';
 import { eq } from 'drizzle-orm';
@@ -21,9 +21,9 @@ export const GET: RequestHandler = async ({ url, cookies }) => {
   const tokenSet = await exchangeCode(code, verifier);
   const me = await fetchSpotifyMe(tokenSet.access_token);
 
-  // Normalize product to the known enum values; treat anything else as 'open'.
-  const product: 'premium' | 'free' | 'open' =
-    me.product === 'premium' || me.product === 'free' ? me.product : 'open';
+  // Feb-2026 API removed `product` from /me; absent → 'premium' so re-logins
+  // don't downgrade the owner and gate playback. See normalizeProduct.
+  const product = normalizeProduct(me.product);
 
   // Upsert user
   const existing = await db.select().from(users).where(eq(users.spotifyId, me.id)).limit(1);

@@ -71,14 +71,26 @@ export async function refreshAccessToken(refreshToken: string): Promise<TokenSet
   return { ...json, refresh_token: json.refresh_token ?? refreshToken };
 }
 
+// Feb-2026 API: `email`, `product`, `country` etc. were removed from /me —
+// `product` is typed optional and normalized via normalizeProduct below.
 export async function fetchSpotifyMe(
   accessToken: string,
-): Promise<{ id: string; display_name: string | null; email?: string; product: 'premium' | 'free' | 'open' }> {
+): Promise<{ id: string; display_name: string | null; product?: string }> {
   const res = await fetch('https://api.spotify.com/v1/me', {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   if (!res.ok) throw new Error(`Spotify /me failed: ${res.status}`);
   return res.json();
+}
+
+// Normalize /me's product field to our enum. Absent (the post-Feb-2026 norm)
+// maps to 'premium', NOT 'open': development-mode apps require the owner to
+// have Premium, and 'open' would wrongly trip PremiumGate and disable
+// playback. Unknown strings keep the legacy 'open' mapping.
+export function normalizeProduct(p: unknown): 'premium' | 'free' | 'open' {
+  if (p === 'premium' || p === 'free') return p;
+  if (p == null) return 'premium';
+  return 'open';
 }
 
 export interface SpotifyTrack {

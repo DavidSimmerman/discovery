@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Music, Library, History } from '@lucide/svelte';
+  import { Music, Library, History, Settings } from '@lucide/svelte';
   import { historyBadge } from '$lib/history/badge.svelte';
 
   let { currentRoute }: { currentRoute: string } = $props();
@@ -43,4 +43,14 @@
       {/if}
     </a>
   {/each}
+  <a
+    href="/settings"
+    aria-label="Settings"
+    aria-current={isActive('/settings') ? 'page' : undefined}
+    class="flex w-11 flex-none items-center justify-center rounded-full transition-colors {isActive('/settings')
+      ? 'bg-gradient-to-b from-spotify-green to-[#0e9243] text-black shadow shadow-spotify-green/30'
+      : 'text-white/70 hover:text-white'}"
+  >
+    <Settings class="size-4" />
+  </a>
 </nav>

@@ -1398,7 +1398,7 @@
         data-testid="shuffle-cta"
         disabled={!canShuffle || saving}
         onclick={shuffleNow}
-        class="flex w-full items-center justify-center gap-2 rounded-full bg-gradient-to-b from-purple-500 to-purple-700 py-3.5 font-bold text-white shadow-lg shadow-purple-900/40 transition-opacity disabled:opacity-40"
+        class="flex w-full items-center justify-center gap-2 rounded-full bg-gradient-to-b from-purple-500 to-purple-700 py-3.5 font-bold text-white shadow-lg shadow-purple-900/40 transition-colors disabled:from-purple-950 disabled:to-purple-950 disabled:text-white/40 disabled:shadow-none"
       >
         <Sparkles class="size-4.5" />
         {#if saving}

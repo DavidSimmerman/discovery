@@ -105,7 +105,8 @@
   let minRating = $state<number | null>(persisted.minRating ?? null);
   let activeLabel = $state<string | null>(persisted.activeLabel ?? null);
   let tab = $state<Tab>(persisted.tab ?? 'all');
-  let songSort = $state<SongSort>(persisted.songSort ?? 'recency');
+  // Rating is the default sort — this is a rating app; recency is one tap away.
+  let songSort = $state<SongSort>(persisted.songSort ?? 'rating');
   let artistSort = $state<ArtistSort>(persisted.artistSort ?? 'score');
   let sortMenuOpen = $state(false);
 

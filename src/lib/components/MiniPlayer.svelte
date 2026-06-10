@@ -9,7 +9,12 @@
     navVisible = false,
   }: { store: PlaybackStore; currentRoute: string; navVisible?: boolean } = $props();
 
-  const shown = $derived(store.isActive && currentRoute !== '/now-playing');
+  // Hidden on /now-playing (redundant there) and /shuffle-settings (that page
+  // pins its own full-width Shuffle CTA to the bottom edge — the mini player
+  // showed through the CTA's translucent disabled state).
+  const shown = $derived(
+    store.isActive && currentRoute !== '/now-playing' && currentRoute !== '/shuffle-settings',
+  );
   // Track the nav's bottom offset (max(1rem, safe-area) — slight margin, or just
   // above the home indicator). When the nav is visible, sit above it (nav h-12 +
   // gap ≈ 3.75rem). When hidden, share the nav's resting offset.

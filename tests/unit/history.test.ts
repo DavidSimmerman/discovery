@@ -40,6 +40,22 @@ describe('mergeHistory', () => {
     expect(rows[0].playedAt).toBe(new Date(3_000).toISOString());
   });
 
+  it('counts a feed item and its ingested log row as ONE play', () => {
+    // listHistory merges the Spotify feed AND the local plays log — but the log
+    // now contains the feed's own just-ingested rows (same uri, same timestamp,
+    // both labeled spotify). Those are the same play record, not two listens.
+    const plays: RawPlay[] = [
+      { uri: U1, playedAtMs: 1_000, source: 'spotify' }, // from the feed
+      { uri: U1, playedAtMs: 1_000, source: 'spotify' }, // its ingested log row
+    ];
+    const { rows } = mergeHistory(plays, new Map([[U1, meta()]]), new Map(), new Map(), {
+      includeRated: true,
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].playCount).toBe(1);
+    expect(rows[0].source).toBe('spotify');
+  });
+
   it('marks source as both / spotify / discovery correctly', () => {
     const plays: RawPlay[] = [
       { uri: U1, playedAtMs: 1, source: 'spotify' },

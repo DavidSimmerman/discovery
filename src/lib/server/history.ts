@@ -72,11 +72,23 @@ export function mergeHistory(
   ratingByIsrc: Map<string, number>,
   opts: { includeRated: boolean },
 ): { rows: HistoryRow[]; unratedCount: number } {
+  // The same play record can arrive from both inputs: listHistory ingests the
+  // Spotify feed into the plays log, then reads the log back — so a feed item
+  // and its own log row (identical uri/timestamp/source) would double-count.
+  // Identical records are one play; genuine repeats differ in timestamp.
+  const seen = new Set<string>();
+  const deduped = plays.filter((p) => {
+    const key = `${p.uri}|${p.playedAtMs}|${p.source}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
   const agg = new Map<
     string,
     { lastMs: number; count: number; spotify: boolean; discovery: boolean }
   >();
-  for (const p of plays) {
+  for (const p of deduped) {
     const e = agg.get(p.uri);
     if (e) {
       if (p.playedAtMs > e.lastMs) e.lastMs = p.playedAtMs;
@@ -190,13 +202,21 @@ export async function listHistory(
     }
   }
 
-  // 3. In-app plays within the window.
+  // 3. Logged plays within the window — both in-app picks and previously
+  //    ingested Spotify rows (which reach deeper than the rolling feed).
   const localRows = await db
-    .select({ uri: playsTable.spotifyTrackUri, playedAt: playsTable.playedAt })
+    .select({
+      uri: playsTable.spotifyTrackUri,
+      playedAt: playsTable.playedAt,
+      source: playsTable.source,
+    })
     .from(playsTable)
     .where(and(eq(playsTable.userId, userId), gt(playsTable.playedAt, cutoff)));
 
   // 4. Flatten both sources into raw plays (double-guarding the window bound).
+  //    Log rows keep their true origin: an ingested Spotify play stays
+  //    'spotify' so mergeHistory can collapse it against the live feed item
+  //    (same uri/timestamp/source = same play record, not a second listen).
   const plays: RawPlay[] = [
     ...spotifyItems.map((i) => ({
       uri: i.track.uri,
@@ -206,7 +226,7 @@ export async function listHistory(
     ...localRows.map((r) => ({
       uri: r.uri,
       playedAtMs: r.playedAt.getTime(),
-      source: 'discovery' as const,
+      source: r.source === 'spotify' ? ('spotify' as const) : ('discovery' as const),
     })),
   ].filter((p) => Number.isFinite(p.playedAtMs) && p.playedAtMs > cutoffMs);
 

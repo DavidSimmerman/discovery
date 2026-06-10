@@ -38,6 +38,8 @@ const saved = (uri: string, addedAt = '2026-06-01T00:00:00Z') => ({
     explicit: false,
     external_ids: { isrc: 'QZXYZ7654321' },
     artists: [{ id: 'a1', name: 'Artist' }],
+    album: { images: [{ url: 'art-640', width: 640, height: 640 }] },
+    duration_ms: 200_000,
   },
 });
 
@@ -61,6 +63,8 @@ describe('fetchSavedTracks', () => {
         artists: [{ id: 'a1', name: 'Artist' }],
         explicit: false,
         isrc: 'QZXYZ7654321',
+        albumArtUrl: 'art-640',
+        durationMs: 200_000,
       },
       {
         uri: 'spotify:track:bbbbbbbbbbbbbbbbbbbbbb',
@@ -68,6 +72,8 @@ describe('fetchSavedTracks', () => {
         artists: [{ id: 'a1', name: 'Artist' }],
         explicit: false,
         isrc: 'QZXYZ7654321',
+        albumArtUrl: 'art-640',
+        durationMs: 200_000,
       },
     ]);
   });

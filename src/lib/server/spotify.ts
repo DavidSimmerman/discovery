@@ -321,6 +321,10 @@ export interface PlaylistTrack {
   explicit: boolean;
   // For ISRC-aware rating matches (Spotify relinks / duplicate album URIs).
   isrc: string | null;
+  // Display extras. Saved-tracks payloads carry these (full track objects);
+  // playlist items don't (the fields param trims them) — hence optional.
+  albumArtUrl?: string | null;
+  durationMs?: number | null;
 }
 
 // Every playable track in a playlist, paginated 100 at a time. Local files and
@@ -384,7 +388,8 @@ function toPlaylistTrack(t: RawPlaylistTrack): PlaylistTrack | null {
 
 // The user's Liked Songs (saved-tracks library), paginated 50 at a time —
 // /v1/me/tracks caps `limit` at 50. Same PlaylistTrack shape as playlists so
-// the shuffle plumbing treats Liked Songs as just another source.
+// the shuffle plumbing treats Liked Songs as just another source; the full
+// payload also carries art + duration for the unrated-review list.
 // Requires user-library-read.
 export async function fetchSavedTracks(accessToken: string): Promise<PlaylistTrack[]> {
   const out: PlaylistTrack[] = [];
@@ -398,11 +403,22 @@ export async function fetchSavedTracks(accessToken: string): Promise<PlaylistTra
     }
     const json: {
       next?: string | null;
-      items?: { track?: RawPlaylistTrack }[];
+      items?: {
+        track?: RawPlaylistTrack & {
+          album?: { images?: { url: string; width?: number }[] } | null;
+          duration_ms?: number;
+        };
+      }[];
     } = await res.json();
     for (const entry of json.items ?? []) {
       const t = toPlaylistTrack(entry?.track ?? null);
-      if (t) out.push(t);
+      if (!t) continue;
+      const images = entry?.track?.album?.images ?? [];
+      t.albumArtUrl = images.length
+        ? images.reduce((a, b) => ((b.width ?? 0) > (a.width ?? 0) ? b : a)).url
+        : null;
+      t.durationMs = entry?.track?.duration_ms ?? null;
+      out.push(t);
     }
     url = json.next ?? null;
   }

@@ -10,6 +10,7 @@
   import TabbedPanel from '$lib/components/TabbedPanel.svelte';
   import PendingPlayCard from '$lib/components/PendingPlayCard.svelte';
   import ResumeShuffleOffer from '$lib/components/ResumeShuffleOffer.svelte';
+  import LikedAlertCard from '$lib/components/LikedAlertCard.svelte';
   import { getPlaybackStore } from '$lib/playback/player.svelte';
   import { SlidersHorizontal } from '@lucide/svelte';
 
@@ -167,6 +168,10 @@
       </div>
     </PremiumGate>
   {/if}
+
+  <div class="w-full max-w-md">
+    <LikedAlertCard />
+  </div>
 
   <div aria-live="polite" class="min-h-5 text-sm text-red-400">
     {#if error}{error}{/if}

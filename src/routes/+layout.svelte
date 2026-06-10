@@ -6,6 +6,7 @@
   import MiniPlayer from '$lib/components/MiniPlayer.svelte';
   import BottomNav from '$lib/components/BottomNav.svelte';
   import { historyBadge } from '$lib/history/badge.svelte';
+  import { likedUnrated } from '$lib/liked/badge.svelte';
 
   let { children, data } = $props();
 
@@ -23,6 +24,8 @@
     void fetch('/api/me/top-lists/refresh', { method: 'POST' }).catch(() => {});
     // Populate the History nav badge (unrated recent plays) once on app load.
     void historyBadge.refresh();
+    // And the unrated-liked count (now-playing alert card + Library callout).
+    void likedUnrated.refresh();
     return () => playback.destroy();
   });
 

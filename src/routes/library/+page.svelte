@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import { Search, Star, ArrowUpDown } from '@lucide/svelte';
+  import { Search, Star, ArrowUpDown, Heart, ChevronRight } from '@lucide/svelte';
+  import { likedUnrated } from '$lib/liked/badge.svelte';
   import LibraryRow from '$lib/components/LibraryRow.svelte';
   import ArtistRow from '$lib/components/ArtistRow.svelte';
   import { getPlaybackStore } from '$lib/playback/player.svelte';
@@ -430,6 +431,25 @@
       </PremiumGate>
     {/if}
   </header>
+
+  {#if likedUnrated.loaded && likedUnrated.count > 0}
+    <a
+      href="/liked"
+      data-testid="liked-callout"
+      class="flex items-center gap-3 rounded-2xl border border-pink-400/30 bg-pink-500/[0.08] p-3 transition-colors hover:bg-pink-500/[0.14]"
+    >
+      <div class="grid size-11 flex-shrink-0 place-items-center rounded-lg bg-gradient-to-br from-indigo-500 to-violet-300">
+        <Heart class="size-4.5 fill-white text-white" />
+      </div>
+      <div class="min-w-0 flex-1">
+        <div class="text-sm font-bold">Liked Songs</div>
+        <div class="text-xs text-pink-300/90">
+          {likedUnrated.count} unrated of {likedUnrated.total} — review them
+        </div>
+      </div>
+      <ChevronRight class="size-4 flex-shrink-0 text-white/30" />
+    </a>
+  {/if}
 
   <div class="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.08] px-4 py-2.5 backdrop-blur">
     <Search class="size-4 text-white/50" />

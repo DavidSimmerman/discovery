@@ -19,10 +19,15 @@ import {
   saveUserSettings,
   withUserSessionLock,
 } from '$lib/server/shuffle/session-store';
+import { autoEnrichIfBehind } from '$lib/server/shuffle/enrichment';
 
 export const GET: RequestHandler = async ({ locals }) => {
   if (!locals.user) throw error(401, 'not logged in');
   const userId = locals.user.id;
+  // Opening shuffle settings is the natural catch-up point for the enrichment
+  // backfill (artist/genre filter options are empty until it runs). Guarded +
+  // fire-and-forget inside autoEnrichIfBehind.
+  void autoEnrichIfBehind(userId);
   // libraryCount/discoveryCount feed the source cards' subtitles; presetId
   // lets the header pill highlight the preset the session was applied from.
   // settings + presetId read under the same lock so a racing PUT/apply can't

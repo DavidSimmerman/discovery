@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Stub every SvelteKit-server import the module touches, so the pure helpers
 // can be imported without spinning up env/db.
@@ -23,12 +23,16 @@ vi.mock('$lib/server/shuffle/providers/lastfm', () => ({ fetchSimilarTracks: vi.
 vi.mock('$lib/server/spotify', () => ({
   fetchTracks: vi.fn(),
   fetchArtists: vi.fn(),
-  fetchArtistTopTracks: vi.fn(),
   searchTrack: vi.fn(),
   idFromUri: (u: string) => u,
 }));
 
-import { computeDuplicateGroups, __test, type FamilyRow } from '../../src/lib/server/shuffle/enrichment';
+import {
+  autoEnrichIfBehind,
+  computeDuplicateGroups,
+  __test,
+  type FamilyRow,
+} from '../../src/lib/server/shuffle/enrichment';
 
 describe('parseReleaseDate', () => {
   const parse = __test.parseReleaseDate;
@@ -111,5 +115,58 @@ describe('computeDuplicateGroups', () => {
 describe('SIMILARS_RATING_THRESHOLD', () => {
   it('matches the 4-star gate', () => {
     expect(__test.SIMILARS_RATING_THRESHOLD).toBe(4);
+  });
+});
+
+describe('autoEnrichIfBehind', () => {
+  const T0 = 1_700_000_000_000;
+
+  function deps(over: Partial<Parameters<typeof autoEnrichIfBehind>[2]> = {}) {
+    return {
+      backlogProbe: vi.fn(async () => ['spotify:track:x']),
+      token: vi.fn(async () => ({ access_token: 'tok' })),
+      run: vi.fn(async () => ({ processed: 1, failed: 0 })),
+      ...over,
+    };
+  }
+
+  beforeEach(() => __test.resetAutoEnrichState());
+
+  it('kicks a run when there is a backlog', async () => {
+    const d = deps();
+    await expect(autoEnrichIfBehind('u1', T0, d)).resolves.toBe(true);
+    expect(d.run).toHaveBeenCalledWith('u1', 'tok');
+  });
+
+  it('does nothing when fully enriched', async () => {
+    const d = deps({ backlogProbe: vi.fn(async () => []) });
+    await expect(autoEnrichIfBehind('u1', T0, d)).resolves.toBe(false);
+    expect(d.run).not.toHaveBeenCalled();
+  });
+
+  it('debounces within the cooldown window, per user', async () => {
+    const d = deps();
+    await autoEnrichIfBehind('u1', T0, d);
+    await expect(autoEnrichIfBehind('u1', T0 + 60_000, d)).resolves.toBe(false);
+    await expect(autoEnrichIfBehind('u2', T0 + 60_000, d)).resolves.toBe(true);
+    expect(d.run).toHaveBeenCalledTimes(2);
+  });
+
+  it('kicks again after the cooldown expires', async () => {
+    const d = deps();
+    await autoEnrichIfBehind('u1', T0, d);
+    await expect(autoEnrichIfBehind('u1', T0 + 6 * 60_000, d)).resolves.toBe(true);
+    expect(d.run).toHaveBeenCalledTimes(2);
+  });
+
+  it('never throws — token failures are swallowed', async () => {
+    const d = deps({ token: vi.fn(async () => Promise.reject(new Error('no token'))) });
+    await expect(autoEnrichIfBehind('u1', T0, d)).resolves.toBe(false);
+  });
+
+  it('swallows a rejected run (fire-and-forget)', async () => {
+    const d = deps({ run: vi.fn(async () => Promise.reject(new Error('boom'))) });
+    await expect(autoEnrichIfBehind('u1', T0, d)).resolves.toBe(true);
+    await new Promise((r) => setImmediate(r)); // let the rejection settle
   });
 });

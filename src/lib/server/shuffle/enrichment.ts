@@ -41,6 +41,7 @@ import {
   type SpotifyTrack,
 } from '$lib/server/spotify';
 import { largestAlbumArtUrl } from '$lib/server/tracks';
+import { getValidAccessToken } from '$lib/server/tokens';
 import {
   canonicalTitle,
   detectVersionType,
@@ -86,6 +87,57 @@ export async function getEnrichmentStatus(userId: string): Promise<EnrichmentSta
     enrichedCount: enrichedRow?.n ?? 0,
     running: runningUsers.has(userId),
   };
+}
+
+// ---- auto-kick ---------------------------------------------------------------
+// Lazy trigger so the backfill needs no manual POST: hot paths (shuffle
+// settings load, rating saves) call autoEnrichIfBehind fire-and-forget. A
+// per-user cooldown keeps the backlog probe from running on every request,
+// and bounds re-scans when some tracks can never enrich (deleted on Spotify).
+const AUTO_ENRICH_COOLDOWN_MS = 5 * 60_000;
+const lastAutoEnrichAt = new Map<string, number>();
+
+interface AutoEnrichDeps {
+  backlogProbe: (userId: string) => Promise<string[]>;
+  token: (userId: string) => Promise<{ access_token: string }>;
+  run: (userId: string, accessToken: string) => Promise<unknown>;
+}
+
+const defaultAutoEnrichDeps: AutoEnrichDeps = {
+  backlogProbe: (u) => unenrichedUrisForUser(u, 1),
+  token: (u) => getValidAccessToken(u),
+  run: (u, t) => enrichUserLibrary(u, t),
+};
+
+/**
+ * Start a backfill run if the user has rated tracks that were never enriched.
+ * Fire-and-forget safe: never throws, returns immediately after kicking the
+ * run. Returns true when a run was started.
+ */
+export async function autoEnrichIfBehind(
+  userId: string,
+  now = Date.now(),
+  deps: AutoEnrichDeps = defaultAutoEnrichDeps,
+): Promise<boolean> {
+  try {
+    if (runningUsers.has(userId)) return false;
+    const last = lastAutoEnrichAt.get(userId);
+    if (last !== undefined && now - last < AUTO_ENRICH_COOLDOWN_MS) return false;
+    // Stamp before the async probe so concurrent callers debounce immediately.
+    lastAutoEnrichAt.set(userId, now);
+
+    const backlog = await deps.backlogProbe(userId);
+    if (backlog.length === 0) return false;
+
+    const { access_token } = await deps.token(userId);
+    void deps.run(userId, access_token).catch((err) => {
+      console.error('[enrichment] auto run failed', userId, err);
+    });
+    return true;
+  } catch (err) {
+    console.warn('[enrichment] auto kick failed', userId, err);
+    return false;
+  }
 }
 
 export interface EnrichOptions {
@@ -490,6 +542,7 @@ export const __test = {
   parseReleaseDate,
   unenrichedUrisForUser,
   SIMILARS_RATING_THRESHOLD,
+  resetAutoEnrichState: () => lastAutoEnrichAt.clear(),
 };
 
 // Suppress unused-import warning for idFromUri (we re-export for callers).

@@ -166,6 +166,28 @@ describe('baseScore', () => {
     );
     expect(dampened).toBeCloseTo(neutral * 0.5, 5);
   });
+
+  it('boosts when a label slider is above neutral', () => {
+    const neutral = baseScore(cand('a', '5', { labels: ['lbl1'] }), defaultConfig());
+    const boosted = baseScore(
+      cand('a', '5', { labels: ['lbl1'] }),
+      defaultConfig({ filters: { labels: { lbl1: 100 } } }),
+    );
+    expect(boosted).toBeCloseTo(neutral * 2, 5);
+  });
+
+  it('excludes when a label slider is 0', () => {
+    const cfg = defaultConfig({ filters: { labels: { lbl1: 0 } } });
+    expect(baseScore(cand('a', '5', { labels: ['lbl1'] }), cfg)).toBe(0);
+    expect(gateOk(cand('a', '5', { labels: ['lbl1'] }), emptyState(), cfg, NOW)).toBe(false);
+  });
+
+  it('leaves candidates without the configured label untouched', () => {
+    const cfg = defaultConfig({ filters: { labels: { lbl1: 100 } } });
+    const neutral = baseScore(cand('a', '5'), defaultConfig());
+    expect(baseScore(cand('a', '5', { labels: ['other'] }), cfg)).toBe(neutral);
+    expect(baseScore(cand('a', '5'), cfg)).toBe(neutral);
+  });
 });
 
 describe('recencyMultiplier', () => {

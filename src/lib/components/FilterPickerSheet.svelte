@@ -16,9 +16,20 @@
     // Cycle: neutral → include → exclude → neutral
     oncycle: (option: FilterOption) => void;
     onclose: () => void;
+    // Tap-behavior caption; override when oncycle isn't the 3-way cycle.
+    hint?: string;
   };
 
-  let { title, options, open, loading, stateOf, oncycle, onclose }: Props = $props();
+  let {
+    title,
+    options,
+    open,
+    loading,
+    stateOf,
+    oncycle,
+    onclose,
+    hint = 'tap: include → exclude → off',
+  }: Props = $props();
 
   let search = $state('');
 
@@ -59,7 +70,7 @@
     <div class="mx-auto mb-3 h-1 w-10 rounded-full bg-white/20"></div>
     <div class="mb-2 flex items-baseline justify-between px-1">
       <p class="text-xs font-medium uppercase tracking-wide text-white/40">{title}</p>
-      <p class="text-[10px] text-white/30">tap: include → exclude → off</p>
+      <p class="text-[10px] text-white/30">{hint}</p>
     </div>
 
     <input

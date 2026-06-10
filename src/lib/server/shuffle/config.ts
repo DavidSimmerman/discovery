@@ -53,24 +53,10 @@ export type ShuffleSettings = {
   sampler: SamplerConfig;
 };
 
-export const DEFAULT_SAMPLER_CONFIG: SamplerConfig = {
-  mix: { ratedPct: 100, unratedPct: 0 },
-  tierWeights: { '1': 0, '2': 10, '3': 30, '4': 70, '5': 100, unrated: 20 },
-  filters: {},
-  gates: {
-    cooldownCount: { enabled: true, n: 50 },
-    cooldownTime: { enabled: true, hours: 6 },
-    dailyCap: { enabled: false, max: 2 },
-  },
-  recency: {
-    '5': { curve: 'log', halfLifePicks: 80 },
-    '4': { curve: 'exp', halfLifePicks: 40 },
-    '3': { curve: 'linear', halfLifePicks: 20 },
-    '2': { curve: 'linear', halfLifePicks: 10 },
-    '1': { curve: 'linear', halfLifePicks: 5 },
-    unrated: { curve: 'linear', halfLifePicks: 20 },
-  },
-};
+// Moved to $lib/shuffle/defaults so the settings UI can import it (Reset);
+// re-exported here so server code keeps its one import site.
+export { DEFAULT_SAMPLER_CONFIG } from '$lib/shuffle/defaults';
+import { DEFAULT_SAMPLER_CONFIG } from '$lib/shuffle/defaults';
 
 export function defaultFilters(): ShuffleFilters {
   return {
@@ -254,11 +240,9 @@ export function effectiveSamplerConfig(settings: ShuffleSettings, sides: PoolSid
     ratedPct: bump(sides.allowsRated, sides.demandsRated, s.mix.ratedPct),
     unratedPct: bump(sides.allowsUnrated, sides.demandsUnrated, s.mix.unratedPct),
   };
-  // Same guard for the unrated tier weight — a demanded unrated source must be
-  // playable even though the default weight table zeroes/de-prioritizes unrated.
-  const tierWeights =
-    sides.demandsUnrated && s.tierWeights.unrated === 0
-      ? { ...s.tierWeights, unrated: 20 }
-      : s.tierWeights;
-  return { ...s, mix, tierWeights };
+  // The unrated TIER weight is deliberately not bumped: unlike mix.unratedPct
+  // (whose stock value is 0, so a zero usually just means "never touched"),
+  // every shipped default has unrated tier weight 20 — a 0 there can only be
+  // the user dragging the Weighting bar to "never", which we honor.
+  return { ...s, mix };
 }

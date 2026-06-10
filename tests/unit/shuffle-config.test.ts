@@ -125,7 +125,9 @@ describe('effectiveSamplerConfig', () => {
     expect(cfg.mix.unratedPct).toBe(0); // allowed but not demanded → user value stands
   });
 
-  it('bumps a zero unrated tier weight when unrated is demanded', () => {
+  it('honors an explicit zero unrated tier weight even when unrated is demanded', () => {
+    // The Weighting tab lets the user drag the unrated bar to 0 — that's a
+    // deliberate "never", not a stale default (no shipped default ever had 0).
     const zeroTier: ShuffleSettings = {
       ...settings,
       sampler: {
@@ -137,7 +139,7 @@ describe('effectiveSamplerConfig', () => {
       library: false,
       playlists: [{ id: 'p', name: '', mode: 'unrated' }],
     });
-    expect(effectiveSamplerConfig(zeroTier, sides).tierWeights.unrated).toBe(20);
+    expect(effectiveSamplerConfig(zeroTier, sides).tierWeights.unrated).toBe(0);
   });
 });
 

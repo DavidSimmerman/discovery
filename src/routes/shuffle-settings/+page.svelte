@@ -10,11 +10,13 @@
     type FilterChipState,
   } from '$lib/components/FilterPickerSheet.svelte';
   import { getPlaybackStore } from '$lib/playback/player.svelte';
+  import { DEFAULT_SAMPLER_CONFIG } from '$lib/shuffle/defaults';
   import type {
     ShuffleSettings,
     PlaylistSourceMode,
     FilterEntry,
   } from '$lib/server/shuffle/config';
+  import type { RatingTier } from '$lib/server/shuffle/sampler';
 
   const playback = getPlaybackStore();
 
@@ -151,7 +153,8 @@
     }
   }
   $effect(() => {
-    if (tab === 'filters') void loadFilterOptions();
+    // Weighting needs the same catalogue: boost rows resolve names from it.
+    if (tab === 'filters' || tab === 'weighting') void loadFilterOptions();
   });
 
   type Axis = 'artists' | 'genres' | 'labels';
@@ -227,6 +230,120 @@
       r.minStars = star;
       r.maxStars = star;
     }
+  }
+
+  // ---- weighting (soft sampler knobs) ------------------------------------------
+  const TIERS: { key: RatingTier; label: string }[] = [
+    { key: '1', label: '1★' },
+    { key: '2', label: '2★' },
+    { key: '3', label: '3★' },
+    { key: '4', label: '4★' },
+    { key: '5', label: '5★' },
+    { key: 'unrated', label: 'unrated' },
+  ];
+
+  function setTierWeight(tier: RatingTier, value: number) {
+    if (!settings) return;
+    settings.sampler.tierWeights[tier] = Math.max(0, Math.min(100, value));
+  }
+
+  // Drag anywhere in a bar's track; weight follows the pointer in 5-steps.
+  function tierDrag(e: PointerEvent, tier: RatingTier) {
+    const el = e.currentTarget as HTMLElement;
+    el.setPointerCapture(e.pointerId);
+    const rect = el.getBoundingClientRect();
+    const apply = (clientY: number) => {
+      const frac = 1 - (clientY - rect.top) / rect.height;
+      setTierWeight(tier, Math.round(Math.max(0, Math.min(1, frac)) * 20) * 5);
+    };
+    apply(e.clientY);
+    const move = (ev: PointerEvent) => apply(ev.clientY);
+    const done = () => {
+      el.removeEventListener('pointermove', move);
+      el.removeEventListener('pointerup', done);
+      el.removeEventListener('pointercancel', done);
+    };
+    el.addEventListener('pointermove', move);
+    el.addEventListener('pointerup', done);
+    el.addEventListener('pointercancel', done);
+  }
+
+  function tierKeydown(e: KeyboardEvent, tier: RatingTier) {
+    if (!settings) return;
+    const cur = settings.sampler.tierWeights[tier];
+    if (e.key === 'ArrowUp' || e.key === 'ArrowRight') {
+      e.preventDefault();
+      setTierWeight(tier, cur + 5);
+    } else if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') {
+      e.preventDefault();
+      setTierWeight(tier, cur - 5);
+    }
+  }
+
+  // Boost axes map straight onto SamplerConfig.filters (id → 0..100 slider,
+  // 50 = neutral, 0 = never play). New entries start at 75 (1.5×).
+  type BoostAxis = 'artists' | 'genres' | 'labels';
+  const BOOST_DEFAULT = 75;
+  let boostPicker = $state<BoostAxis | null>(null);
+
+  const BOOST_AXES: { axis: BoostAxis; title: string; empty: string }[] = [
+    { axis: 'artists', title: 'Artist boosts', empty: 'Play favorite artists more (or less)' },
+    { axis: 'genres', title: 'Genre boosts', empty: 'Lean into a genre' },
+    { axis: 'labels', title: 'Label boosts', empty: 'Weight by your own labels' },
+  ];
+
+  function boostOptions(axis: BoostAxis): FilterOption[] {
+    if (!filterOptions) return [];
+    return axis === 'artists'
+      ? filterOptions.artists
+      : axis === 'genres'
+        ? filterOptions.genres
+        : filterOptions.labels;
+  }
+
+  // Genres are their own ids; artists/labels resolve via the catalogue. A
+  // boosted id that's left the catalogue still renders (and can be removed).
+  function boostName(axis: BoostAxis, id: string): string {
+    if (axis === 'genres') return id;
+    return boostOptions(axis).find((o) => o.id === id)?.name ?? id;
+  }
+
+  function boostEntries(axis: BoostAxis): { id: string; name: string; value: number }[] {
+    const map = settings?.sampler.filters[axis] ?? {};
+    return Object.entries(map).map(([id, value]) => ({ id, name: boostName(axis, id), value }));
+  }
+
+  function toggleBoost(axis: BoostAxis, opt: { id: string }) {
+    if (!settings) return;
+    const map = { ...(settings.sampler.filters[axis] ?? {}) };
+    if (opt.id in map) delete map[opt.id];
+    else map[opt.id] = BOOST_DEFAULT;
+    settings.sampler.filters[axis] = map;
+  }
+
+  function setBoost(axis: BoostAxis, id: string, value: number) {
+    if (!settings) return;
+    settings.sampler.filters[axis] = { ...(settings.sampler.filters[axis] ?? {}), [id]: value };
+  }
+
+  function multiplierLabel(value: number): string {
+    return value === 0 ? 'never' : `${(value / 50).toFixed(1)}×`;
+  }
+
+  // Freshness preset lists; a persisted value outside the list is prepended so
+  // the select never shows blank.
+  const withCurrent = (presets: number[], cur: number) =>
+    presets.includes(cur) ? presets : [cur, ...presets];
+  const COOLDOWN_SONGS = [10, 25, 50, 100, 200];
+  const COOLDOWN_HOURS = [1, 3, 6, 12, 24, 48];
+  const DAILY_CAPS = [1, 2, 3, 5];
+
+  function resetWeighting() {
+    if (!settings) return;
+    const def = structuredClone(DEFAULT_SAMPLER_CONFIG);
+    settings.sampler.tierWeights = def.tierWeights;
+    settings.sampler.filters = def.filters;
+    settings.sampler.gates = def.gates;
   }
 
   // ---- live CTA count (exact, server-computed) ---------------------------------
@@ -642,11 +759,216 @@
       </div>
     </div>
   {:else}
-    <div class="rounded-2xl border border-white/5 bg-white/[0.03] p-6 text-center">
-      <p class="text-sm font-semibold text-white/70">Weighting coming soon</p>
-      <p class="mt-1 text-xs text-white/40">
-        Star-tier, artist and genre weighting plus freshness controls land here.
-      </p>
+    {@const gates = settings.sampler.gates}
+    <div class="flex flex-col gap-3">
+      <div class="flex items-center justify-between px-1">
+        <p class="text-xs text-white/40">Soft preferences — what plays <i>more</i></p>
+        <button
+          type="button"
+          data-testid="weight-reset"
+          onclick={resetWeighting}
+          class="text-xs font-medium text-white/50 transition-colors hover:text-white/80"
+        >
+          Reset
+        </button>
+      </div>
+
+      <!-- star tiers -->
+      <div class="rounded-2xl bg-white/[0.04] p-4" data-testid="weight-tiers">
+        <div class="mb-3 flex items-center justify-between">
+          <span class="text-sm font-semibold">By star rating</span>
+          <span class="text-[10px] text-white/30">drag bars · 0 = never</span>
+        </div>
+        <div class="flex items-end gap-2">
+          {#each TIERS as t (t.key)}
+            {@const w = settings.sampler.tierWeights[t.key]}
+            <div class="flex flex-1 flex-col items-center gap-1.5">
+              <span class="text-[9px] tabular-nums {w === 0 ? 'text-red-300/70' : 'text-white/40'}">{w}</span>
+              <div
+                role="slider"
+                tabindex="0"
+                aria-label="Weight for {t.label}"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={w}
+                data-testid="weight-tier-{t.key}"
+                onpointerdown={(e) => tierDrag(e, t.key)}
+                onkeydown={(e) => tierKeydown(e, t.key)}
+                class="relative h-24 w-full cursor-pointer touch-none select-none rounded-md bg-white/[0.03]"
+              >
+                <div
+                  class="absolute inset-x-0 bottom-0 rounded-t-md {t.key === 'unrated'
+                    ? 'bg-white/25'
+                    : 'bg-gradient-to-t from-purple-700 to-purple-500'}"
+                  style="height:{Math.max(w, 2)}%; opacity:{w === 0 ? 0.25 : 0.35 + (w / 100) * 0.65}"
+                ></div>
+              </div>
+              <span class="text-[10px] text-white/40">{t.label}</span>
+            </div>
+          {/each}
+        </div>
+      </div>
+
+      <!-- artist / genre / label boosts -->
+      {#each BOOST_AXES as { axis, title, empty } (axis)}
+        {@const entries = boostEntries(axis)}
+        <div class="rounded-2xl bg-white/[0.04] p-4" data-testid="boost-{axis}">
+          <div class="mb-2.5 flex items-center justify-between">
+            <span class="text-sm font-semibold">{title}</span>
+            <button
+              type="button"
+              data-testid="boost-{axis}-add"
+              onclick={() => (boostPicker = axis)}
+              class="text-xs font-medium text-purple-300"
+            >
+              + add
+            </button>
+          </div>
+          {#if entries.length === 0}
+            <p class="text-xs text-white/30">{empty} — tap “+ add”</p>
+          {:else}
+            <div class="flex flex-col gap-3">
+              {#each entries as entry (entry.id)}
+                <div data-testid="boost-row">
+                  <div class="mb-1 flex items-center justify-between gap-2 text-xs">
+                    <span class="truncate">{entry.name}</span>
+                    <span class="flex flex-shrink-0 items-center gap-2">
+                      <span
+                        data-testid="boost-mult"
+                        class="font-medium tabular-nums {entry.value === 0
+                          ? 'text-red-300'
+                          : entry.value < 50
+                            ? 'text-white/50'
+                            : 'text-purple-300'}"
+                      >
+                        {multiplierLabel(entry.value)}
+                      </span>
+                      <button
+                        type="button"
+                        aria-label="Remove {entry.name}"
+                        onclick={() => toggleBoost(axis, entry)}
+                      >
+                        <X class="size-3.5 text-white/40" />
+                      </button>
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    step="5"
+                    value={entry.value}
+                    aria-label="Boost for {entry.name}"
+                    oninput={(e) => setBoost(axis, entry.id, Number(e.currentTarget.value))}
+                    class="w-full accent-purple-500"
+                  />
+                </div>
+              {/each}
+            </div>
+            <p class="mt-2 text-[10px] text-white/30">50 = neutral · 100 = 2× as often · 0 = never</p>
+          {/if}
+        </div>
+      {/each}
+
+      <!-- freshness -->
+      <p class="mt-2 px-1 text-[11px] font-bold uppercase tracking-wide text-white/40">Freshness</p>
+      <div class="rounded-2xl bg-white/[0.04] text-sm divide-y divide-white/5">
+        <div class="flex items-center justify-between gap-3 p-3.5">
+          <span class="flex-1">No repeat within</span>
+          <select
+            data-testid="cooldown-count-n"
+            disabled={!gates.cooldownCount.enabled}
+            value={gates.cooldownCount.n}
+            onchange={(e) => (gates.cooldownCount.n = Number(e.currentTarget.value))}
+            class="rounded-lg border border-white/10 bg-white/[0.06] px-2 py-1 text-xs disabled:opacity-40"
+          >
+            {#each withCurrent(COOLDOWN_SONGS, gates.cooldownCount.n) as n (n)}
+              <option value={n}>{n} songs</option>
+            {/each}
+          </select>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={gates.cooldownCount.enabled}
+            aria-label="No repeat within songs"
+            data-testid="cooldown-count-toggle"
+            onclick={() => (gates.cooldownCount.enabled = !gates.cooldownCount.enabled)}
+            class="relative h-6 w-11 flex-shrink-0 rounded-full transition-colors {gates.cooldownCount.enabled
+              ? 'bg-purple-500'
+              : 'bg-white/15'}"
+          >
+            <span
+              class="absolute top-0.5 size-5 rounded-full bg-white transition-all {gates.cooldownCount.enabled
+                ? 'left-[22px]'
+                : 'left-0.5'}"
+            ></span>
+          </button>
+        </div>
+
+        <div class="flex items-center justify-between gap-3 p-3.5">
+          <span class="flex-1">No repeat within</span>
+          <select
+            data-testid="cooldown-time-hours"
+            disabled={!gates.cooldownTime.enabled}
+            value={gates.cooldownTime.hours}
+            onchange={(e) => (gates.cooldownTime.hours = Number(e.currentTarget.value))}
+            class="rounded-lg border border-white/10 bg-white/[0.06] px-2 py-1 text-xs disabled:opacity-40"
+          >
+            {#each withCurrent(COOLDOWN_HOURS, gates.cooldownTime.hours) as h (h)}
+              <option value={h}>{h} {h === 1 ? 'hour' : 'hours'}</option>
+            {/each}
+          </select>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={gates.cooldownTime.enabled}
+            aria-label="No repeat within hours"
+            data-testid="cooldown-time-toggle"
+            onclick={() => (gates.cooldownTime.enabled = !gates.cooldownTime.enabled)}
+            class="relative h-6 w-11 flex-shrink-0 rounded-full transition-colors {gates.cooldownTime.enabled
+              ? 'bg-purple-500'
+              : 'bg-white/15'}"
+          >
+            <span
+              class="absolute top-0.5 size-5 rounded-full bg-white transition-all {gates.cooldownTime.enabled
+                ? 'left-[22px]'
+                : 'left-0.5'}"
+            ></span>
+          </button>
+        </div>
+
+        <div class="flex items-center justify-between gap-3 p-3.5">
+          <span class="flex-1">Daily cap per song</span>
+          <select
+            data-testid="daily-cap-max"
+            disabled={!gates.dailyCap.enabled}
+            value={gates.dailyCap.max}
+            onchange={(e) => (gates.dailyCap.max = Number(e.currentTarget.value))}
+            class="rounded-lg border border-white/10 bg-white/[0.06] px-2 py-1 text-xs disabled:opacity-40"
+          >
+            {#each withCurrent(DAILY_CAPS, gates.dailyCap.max) as m (m)}
+              <option value={m}>{m}×</option>
+            {/each}
+          </select>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={gates.dailyCap.enabled}
+            aria-label="Daily cap per song"
+            data-testid="daily-cap-toggle"
+            onclick={() => (gates.dailyCap.enabled = !gates.dailyCap.enabled)}
+            class="relative h-6 w-11 flex-shrink-0 rounded-full transition-colors {gates.dailyCap.enabled
+              ? 'bg-purple-500'
+              : 'bg-white/15'}"
+          >
+            <span
+              class="absolute top-0.5 size-5 rounded-full bg-white transition-all {gates.dailyCap.enabled
+                ? 'left-[22px]'
+                : 'left-0.5'}"
+            ></span>
+          </button>
+        </div>
+      </div>
     </div>
   {/if}
 
@@ -706,4 +1028,17 @@
   stateOf={(id) => axisState('genres', id)}
   oncycle={(o) => cycleAxis('genres', o)}
   onclose={() => (genrePickerOpen = false)}
+/>
+
+<!-- Boost picker: same sheet, toggle semantics (selected = boosted at 1.5×). -->
+<FilterPickerSheet
+  title={BOOST_AXES.find((a) => a.axis === boostPicker)?.title ?? ''}
+  options={boostPicker ? boostOptions(boostPicker) : []}
+  open={boostPicker !== null}
+  loading={optionsLoading}
+  stateOf={(id) =>
+    boostPicker && settings?.sampler.filters[boostPicker]?.[id] !== undefined ? 'include' : null}
+  oncycle={(o) => boostPicker && toggleBoost(boostPicker, o)}
+  onclose={() => (boostPicker = null)}
+  hint="tap to add or remove"
 />

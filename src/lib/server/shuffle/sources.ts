@@ -122,7 +122,8 @@ export function mergeCandidates(args: {
 export async function loadCandidates(
   tx: Pick<DbExec, 'select'>,
   userId: string,
-  settings: Pick<ShuffleSettings, 'sources' | 'filters'>,
+  settings: Pick<ShuffleSettings, 'sources' | 'filters'> &
+    Partial<Pick<ShuffleSettings, 'sampler'>>,
   prefetched: PrefetchedPlaylists,
 ): Promise<Candidate[]> {
   const { sources, filters } = settings;
@@ -194,10 +195,16 @@ export async function loadCandidates(
     metaByUri,
   });
 
-  // Label map only when a label filter is active — it's a per-user full scan
-  // of track_labels otherwise wasted.
+  // Label map only when a label filter OR a label boost is active — it's a
+  // per-user full scan of track_labels otherwise wasted. Boosted labels must
+  // also land on the candidates themselves so the sampler can weight by them.
+  const labelBoostsActive = Object.keys(settings.sampler?.filters.labels ?? {}).length > 0;
   let labelsByUri = new Map<string, string[]>();
-  if (filters.labels.include.length > 0 || filters.labels.exclude.length > 0) {
+  if (
+    filters.labels.include.length > 0 ||
+    filters.labels.exclude.length > 0 ||
+    labelBoostsActive
+  ) {
     const rows = await tx
       .select({ uri: trackLabels.spotifyTrackUri, labelId: trackLabels.labelId })
       .from(trackLabels)
@@ -207,6 +214,12 @@ export async function loadCandidates(
       const list = labelsByUri.get(r.uri);
       if (list) list.push(r.labelId);
       else labelsByUri.set(r.uri, [r.labelId]);
+    }
+  }
+  if (labelBoostsActive) {
+    for (const c of merged) {
+      const l = labelsByUri.get(c.uri);
+      if (l) c.labels = l;
     }
   }
 

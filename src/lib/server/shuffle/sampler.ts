@@ -27,6 +27,9 @@ export type Candidate = {
   // null when unknown (track not yet enriched). Consumed by the hard filter
   // layer (shuffle/filters.ts), not by the sampler itself.
   explicit?: boolean | null;
+  // The user's own track labels (label ids). Only populated when label
+  // weighting/filtering is active — loading them is a per-user table scan.
+  labels?: string[];
 };
 
 export type SamplerState = {
@@ -62,6 +65,7 @@ export type SamplerConfig = {
     artists?: Record<string, number>;
     genres?: Record<string, number>;
     versionTypes?: Record<string, number>;
+    labels?: Record<string, number>;
   };
   gates: {
     cooldownCount: { enabled: boolean; n: number };
@@ -117,6 +121,9 @@ export function gateOk(
   for (const g of c.genres) {
     if (sliderFor(cfg.filters.genres, g) === 0) return false;
   }
+  for (const l of c.labels ?? []) {
+    if (sliderFor(cfg.filters.labels, l) === 0) return false;
+  }
 
   if (cfg.gates.cooldownCount.enabled) {
     const n = cfg.gates.cooldownCount.n;
@@ -162,6 +169,12 @@ export function baseScore(c: Candidate, cfg: SamplerConfig): number {
   }
   for (const g of c.genres) {
     const s = cfg.filters.genres?.[g];
+    if (s === undefined) continue;
+    if (s === 0) return 0;
+    wFilter *= filterMult(s);
+  }
+  for (const l of c.labels ?? []) {
+    const s = cfg.filters.labels?.[l];
     if (s === undefined) continue;
     if (s === 0) return 0;
     wFilter *= filterMult(s);

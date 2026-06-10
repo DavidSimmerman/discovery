@@ -1,6 +1,6 @@
-// Liked Songs as a shuffle source: GET /v1/me/tracks pages map onto the same
-// PlaylistTrack shape playlists use; a 1-item probe powers the pseudo-snapshot
-// (saved tracks have no snapshot_id).
+// Liked Songs as a shuffle source: GET /v1/me/library (legacy /v1/me/tracks
+// fallback) pages map onto the same PlaylistTrack shape playlists use; a
+// 1-item probe powers the pseudo-snapshot (saved tracks have no snapshot_id).
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 
@@ -19,8 +19,9 @@ function mockFetch(pages: unknown[]) {
     'fetch',
     vi.fn(async (url: string) => {
       calls.push(url);
-      const json = pages[Math.min(i++, pages.length - 1)];
-      return { ok: true, status: 200, json: async () => json } as unknown as Response;
+      const page = pages[Math.min(i++, pages.length - 1)] as { __status?: number };
+      const status = page?.__status ?? 200;
+      return { ok: status < 400, status, json: async () => page } as unknown as Response;
     }),
   );
 }
@@ -44,17 +45,18 @@ const saved = (uri: string, addedAt = '2026-06-01T00:00:00Z') => ({
 });
 
 describe('fetchSavedTracks', () => {
-  it('pages /v1/me/tracks at limit 50 and maps to PlaylistTrack', async () => {
+  it('pages /v1/me/library at limit 50 and maps to PlaylistTrack', async () => {
     mockFetch([
       {
-        next: 'https://api.spotify.com/v1/me/tracks?offset=50&limit=50',
+        next: 'https://api.spotify.com/v1/me/library?type=track&offset=50&limit=50',
         items: [saved('spotify:track:aaaaaaaaaaaaaaaaaaaaaa')],
       },
       { next: null, items: [saved('spotify:track:bbbbbbbbbbbbbbbbbbbbbb')] },
     ]);
     const out = await fetchSavedTracks('tok');
     const first = new URL(calls[0]);
-    expect(first.pathname).toBe('/v1/me/tracks');
+    expect(first.pathname).toBe('/v1/me/library');
+    expect(first.searchParams.get('type')).toBe('track');
     expect(first.searchParams.get('limit')).toBe('50');
     expect(out).toEqual([
       {
@@ -87,6 +89,27 @@ describe('fetchSavedTracks', () => {
     ]);
     const out = await fetchSavedTracks('tok');
     expect(out.map((t) => t.uri)).toEqual(['spotify:track:cccccccccccccccccccccc']);
+  });
+
+  it('falls back to legacy /v1/me/tracks when /me/library 4xxs', async () => {
+    mockFetch([
+      { __status: 404 },
+      { next: null, items: [saved('spotify:track:cccccccccccccccccccccc')] },
+    ]);
+    const out = await fetchSavedTracks('tok');
+    expect(new URL(calls[0]).pathname).toBe('/v1/me/library');
+    expect(new URL(calls[1]).pathname).toBe('/v1/me/tracks');
+    expect(out).toHaveLength(1);
+  });
+
+  it('accepts the Feb-2026 items[].item entry shape', async () => {
+    const entry = saved('spotify:track:dddddddddddddddddddddd') as { track?: unknown; item?: unknown };
+    entry.item = entry.track;
+    delete entry.track;
+    mockFetch([{ next: null, items: [entry] }]);
+    const out = await fetchSavedTracks('tok');
+    expect(out).toHaveLength(1);
+    expect(out[0].uri).toBe('spotify:track:dddddddddddddddddddddd');
   });
 });
 

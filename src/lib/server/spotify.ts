@@ -391,9 +391,79 @@ function toPlaylistTrack(t: RawPlaylistTrack): PlaylistTrack | null {
 // the shuffle plumbing treats Liked Songs as just another source; the full
 // payload also carries art + duration for the unrated-review list.
 // Requires user-library-read.
+// Feb-2026: the legacy /v1/me/tracks family was removed for dev-mode apps
+// (contains + PUT verified dead 2026-06-10 — bare 403s); listing moved to the
+// unified /v1/me/library. The docs lag, so the reader is tolerant: it tries
+// /me/library?type=track first, falls back to legacy /me/tracks on 4xx, and
+// accepts both entry shapes (items[].item Feb-2026 / items[].track legacy).
+type RawSavedEntry = {
+  added_at?: string;
+  item?: RawSavedTrack;
+  track?: RawSavedTrack;
+} | null;
+type RawSavedTrack = (RawPlaylistTrack & {
+  album?: { images?: { url: string; width?: number }[] } | null;
+  duration_ms?: number;
+}) | null;
+type SavedPage = { next?: string | null; total?: number; items?: RawSavedEntry[] };
+
+const SAVED_TRACKS_URLS = [
+  'https://api.spotify.com/v1/me/library?type=track',
+  'https://api.spotify.com/v1/me/tracks', // legacy fallback
+];
+
+// Resolve which listing endpoint this account/app can use, fetch the first
+// page, and remember the winner for the pagination loop (`next` links keep
+// the same base).
+async function fetchFirstSavedPage(
+  accessToken: string,
+  limit: number,
+): Promise<{ page: SavedPage; next: string | null }> {
+  let lastStatus = 0;
+  for (const base of SAVED_TRACKS_URLS) {
+    const res = await fetch(`${base}${base.includes('?') ? '&' : '?'}limit=${limit}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (res.ok) {
+      if (base !== SAVED_TRACKS_URLS[0]) {
+        console.warn('[savedTracks] /me/library listing unavailable — using legacy /me/tracks');
+      }
+      const page = (await res.json()) as SavedPage;
+      return { page, next: page.next ?? null };
+    }
+    lastStatus = res.status;
+    // 4xx → endpoint not available for this app; try the next candidate.
+    // 5xx/429 → genuine failure, surface it.
+    if (res.status >= 500 || res.status === 429) {
+      throw new SpotifyApiError(res.status, `Spotify saved tracks failed: ${res.status}`);
+    }
+  }
+  throw new SpotifyApiError(lastStatus, `Spotify saved tracks failed: ${lastStatus}`);
+}
+
+function pushSavedEntries(out: PlaylistTrack[], page: SavedPage): void {
+  for (const entry of page.items ?? []) {
+    const raw = entry?.item ?? entry?.track ?? null;
+    const t = toPlaylistTrack(raw);
+    if (!t) continue;
+    const images = raw?.album?.images ?? [];
+    t.albumArtUrl = images.length
+      ? images.reduce((a, b) => ((b.width ?? 0) > (a.width ?? 0) ? b : a)).url
+      : null;
+    t.durationMs = raw?.duration_ms ?? null;
+    out.push(t);
+  }
+}
+
+// The user's Liked Songs, paginated 50 at a time. Same PlaylistTrack shape as
+// playlists so the shuffle plumbing treats Liked Songs as just another source;
+// the full payload also carries art + duration for the unrated-review list.
+// Requires user-library-read.
 export async function fetchSavedTracks(accessToken: string): Promise<PlaylistTrack[]> {
   const out: PlaylistTrack[] = [];
-  let url: string | null = 'https://api.spotify.com/v1/me/tracks?limit=50';
+  const first = await fetchFirstSavedPage(accessToken, 50);
+  pushSavedEntries(out, first.page);
+  let url = first.next;
   while (url) {
     const res: Response = await fetch(url, {
       headers: { Authorization: `Bearer ${accessToken}` },
@@ -401,26 +471,9 @@ export async function fetchSavedTracks(accessToken: string): Promise<PlaylistTra
     if (!res.ok) {
       throw new SpotifyApiError(res.status, `Spotify saved tracks failed: ${res.status}`);
     }
-    const json: {
-      next?: string | null;
-      items?: {
-        track?: RawPlaylistTrack & {
-          album?: { images?: { url: string; width?: number }[] } | null;
-          duration_ms?: number;
-        };
-      }[];
-    } = await res.json();
-    for (const entry of json.items ?? []) {
-      const t = toPlaylistTrack(entry?.track ?? null);
-      if (!t) continue;
-      const images = entry?.track?.album?.images ?? [];
-      t.albumArtUrl = images.length
-        ? images.reduce((a, b) => ((b.width ?? 0) > (a.width ?? 0) ? b : a)).url
-        : null;
-      t.durationMs = entry?.track?.duration_ms ?? null;
-      out.push(t);
-    }
-    url = json.next ?? null;
+    const page = (await res.json()) as SavedPage;
+    pushSavedEntries(out, page);
+    url = page.next ?? null;
   }
   return out;
 }
@@ -431,14 +484,8 @@ export async function fetchSavedTracks(accessToken: string): Promise<PlaylistTra
 export async function fetchSavedTracksProbe(
   accessToken: string,
 ): Promise<{ total: number; newestAddedAt: string }> {
-  const res = await fetch('https://api.spotify.com/v1/me/tracks?limit=1', {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
-  if (!res.ok) {
-    throw new SpotifyApiError(res.status, `Spotify saved tracks probe failed: ${res.status}`);
-  }
-  const json: { total?: number; items?: { added_at?: string }[] } = await res.json();
-  return { total: json.total ?? 0, newestAddedAt: json.items?.[0]?.added_at ?? '' };
+  const { page } = await fetchFirstSavedPage(accessToken, 1);
+  return { total: page.total ?? 0, newestAddedAt: page.items?.[0]?.added_at ?? '' };
 }
 
 // Resolve a Last.fm (artist, title) pair to a Spotify track via /v1/search.

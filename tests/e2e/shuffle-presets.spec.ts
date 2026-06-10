@@ -103,6 +103,64 @@ test('duplicate names 409, rename works, delete 404s the second time', async ({ 
   expect(again.status()).toBe(404);
 });
 
+test('dropdown UI: save-as, apply restores settings, rename, delete', async ({ page }) => {
+  await page.goto('/shuffle-settings');
+  await expect(page.getByTestId('shuffle-cta')).toContainText('Shuffle 4 songs');
+
+  // Save the current settings as a preset from the pill menu.
+  await page.getByTestId('preset-pill').click();
+  await page.getByTestId('preset-save-as').click();
+  await page.getByTestId('preset-name-input').fill('Defaults');
+  await page.getByTestId('preset-name-save').click();
+  await expect(page.getByTestId('preset-pill')).toContainText('Defaults');
+
+  // Mutate something (allow explicit off → distinctive blob) and let it save.
+  // The manual save unlinks the preset: pill falls back to the generic label.
+  await page.getByTestId('preset-pill').click(); // close menu
+  const saved = page.waitForResponse(
+    (r) => r.url().includes('/api/shuffle/settings') && r.request().method() === 'PUT' && r.ok(),
+  );
+  await page.getByRole('tab', { name: 'Filters' }).click();
+  await page.getByTestId('filter-explicit').click();
+  await expect(page.getByTestId('filter-explicit')).toHaveAttribute('aria-checked', 'false');
+  await saved;
+  await expect(page.getByTestId('preset-pill')).toContainText('Presets');
+
+  // Apply the preset → explicit flips back on.
+  await page.getByTestId('preset-pill').click();
+  await page.getByTestId('preset-row').filter({ hasText: 'Defaults' }).click();
+  await expect(page.getByTestId('filter-explicit')).toHaveAttribute('aria-checked', 'true');
+
+  // Rename via the row's ⋯ actions.
+  await page.getByTestId('preset-pill').click();
+  await page.getByTestId('preset-actions').click();
+  await page.getByTestId('preset-rename').click();
+  await page.getByTestId('preset-name-input').fill('Stock');
+  await page.getByTestId('preset-name-save').click();
+  await expect(page.getByTestId('preset-row').filter({ hasText: 'Stock' })).toBeVisible();
+  await expect(page.getByTestId('preset-pill')).toContainText('Stock');
+
+  // Delete — pill falls back to the generic label.
+  await page.getByTestId('preset-actions').click();
+  await page.getByTestId('preset-delete').click();
+  await expect(page.getByTestId('preset-row')).toHaveCount(0);
+  await expect(page.getByTestId('preset-pill')).toContainText('Presets');
+
+  // And the pill survives a reload without the preset (session FK nulled).
+  await page.goto('/shuffle-settings');
+  await expect(page.getByTestId('preset-pill')).toContainText('Presets');
+});
+
+test('pill shows the applied preset after a reload', async ({ page }) => {
+  const created = await page.request.post('/api/shuffle/presets', { data: { name: 'Morning' } });
+  expect(created.status()).toBe(201);
+  const { preset } = await created.json();
+  expect((await page.request.post(`/api/shuffle/presets/${preset.id}/apply`)).ok()).toBe(true);
+
+  await page.goto('/shuffle-settings');
+  await expect(page.getByTestId('preset-pill')).toContainText('Morning');
+});
+
 test("another user's preset is invisible: apply/rename/delete all 404", async ({ browser }) => {
   const workerIndex = test.info().workerIndex;
   // Owner creates a preset.

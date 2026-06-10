@@ -91,6 +91,8 @@
       lastSaved = JSON.stringify({ settings: json.settings }); // seed: no save for what we just loaded
       libraryCount = json.libraryCount;
       discoveryCount = json.discoveryCount ?? 0;
+      activePresetId = json.presetId ?? null;
+      void loadPresets(); // pill needs names even before the menu opens
       // Counts for already-selected playlists power the CTA total.
       if (json.settings.sources.playlists.length > 0) {
         void loadStats(json.settings.sources.playlists.map((p: { id: string }) => p.id));
@@ -236,6 +238,171 @@
     } else {
       r.minStars = star;
       r.maxStars = star;
+    }
+  }
+
+  // ---- presets -------------------------------------------------------------------
+  type Preset = { id: string; name: string; updatedAt: string };
+  let presets = $state<Preset[]>([]);
+  let activePresetId = $state<string | null>(null);
+  let presetMenuOpen = $state(false);
+  // Row whose ⋯ actions are expanded; 'save-as' | preset id for the name input.
+  let presetActionsId = $state<string | null>(null);
+  let presetEditing = $state<'save-as' | string | null>(null);
+  let presetNameInput = $state('');
+  let presetBusy = $state(false);
+  let presetError = $state<string | null>(null);
+
+  const activePresetName = $derived(
+    presets.find((p) => p.id === activePresetId)?.name ?? null,
+  );
+
+  async function loadPresets() {
+    try {
+      const res = await fetch('/api/shuffle/presets');
+      if (res.ok) presets = (await res.json()).presets;
+    } catch {
+      // pill just reads "Presets"; the menu shows an empty list
+    }
+  }
+
+  function togglePresetMenu() {
+    presetMenuOpen = !presetMenuOpen;
+    presetActionsId = null;
+    presetEditing = null;
+    presetError = null;
+  }
+
+  async function applyPreset(id: string) {
+    if (presetBusy) return;
+    presetBusy = true;
+    presetError = null;
+    try {
+      // Flush (and cancel) any pending autosave first, so a stale PUT can't
+      // land after the apply and overwrite the preset's settings.
+      if (!(await saveSettings())) throw new Error('flush failed');
+      const res = await fetch(`/api/shuffle/presets/${id}/apply`, { method: 'POST' });
+      if (!res.ok) throw new Error(String(res.status));
+      const json = await res.json();
+      settings = json.settings;
+      // The server just persisted exactly this — don't echo it back.
+      lastSaved = JSON.stringify({ settings: json.settings });
+      activePresetId = id;
+      presetMenuOpen = false;
+    } catch {
+      presetError = "Couldn't apply that preset.";
+    } finally {
+      presetBusy = false;
+    }
+  }
+
+  async function savePresetAs() {
+    const name = presetNameInput.trim();
+    if (!name || !settings || presetBusy) return;
+    presetBusy = true;
+    presetError = null;
+    try {
+      if (!(await saveSettings())) throw new Error('flush failed'); // serialize vs autosave
+      const res = await fetch('/api/shuffle/presets', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name, settings }),
+      });
+      if (res.status === 409) {
+        presetError = 'That name is already taken.';
+        return;
+      }
+      if (!res.ok) throw new Error(String(res.status));
+      const { preset } = await res.json();
+      presets = [preset, ...presets];
+      presetEditing = null;
+      presetNameInput = '';
+      // The new preset IS the current settings — link the session to it, and
+      // only show it as active once the server agrees. (Local `settings` is
+      // left alone: any mid-flight edit re-saves via the autosave debounce.)
+      if (await linkPreset(preset.id)) activePresetId = preset.id;
+    } catch {
+      presetError = "Couldn't save the preset.";
+    } finally {
+      presetBusy = false;
+    }
+  }
+
+  // Point shuffle_sessions.preset_id at a preset whose blob matches the
+  // current settings. Apply is idempotent here — it re-persists the same blob.
+  async function linkPreset(id: string): Promise<boolean> {
+    try {
+      const res = await fetch(`/api/shuffle/presets/${id}/apply`, { method: 'POST' });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  async function renamePreset(id: string) {
+    const name = presetNameInput.trim();
+    if (!name || presetBusy) return;
+    presetBusy = true;
+    presetError = null;
+    try {
+      const res = await fetch(`/api/shuffle/presets/${id}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      if (res.status === 409) {
+        presetError = 'That name is already taken.';
+        return;
+      }
+      if (!res.ok) throw new Error(String(res.status));
+      const { preset } = await res.json();
+      presets = presets.map((p) => (p.id === id ? preset : p));
+      presetEditing = null;
+      presetActionsId = null;
+      presetNameInput = '';
+    } catch {
+      presetError = "Couldn't rename the preset.";
+    } finally {
+      presetBusy = false;
+    }
+  }
+
+  // Overwrite the preset's blob with the current live settings.
+  async function resavePreset(id: string) {
+    if (!settings || presetBusy) return;
+    presetBusy = true;
+    presetError = null;
+    try {
+      if (!(await saveSettings())) throw new Error('flush failed'); // serialize vs autosave
+      const res = await fetch(`/api/shuffle/presets/${id}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ settings }),
+      });
+      if (!res.ok) throw new Error(String(res.status));
+      presetActionsId = null;
+      if (await linkPreset(id)) activePresetId = id;
+    } catch {
+      presetError = "Couldn't update the preset.";
+    } finally {
+      presetBusy = false;
+    }
+  }
+
+  async function deletePreset(id: string) {
+    if (presetBusy) return;
+    presetBusy = true;
+    presetError = null;
+    try {
+      const res = await fetch(`/api/shuffle/presets/${id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error(String(res.status));
+      presets = presets.filter((p) => p.id !== id);
+      if (activePresetId === id) activePresetId = null; // server FK already nulled it
+      presetActionsId = null;
+    } catch {
+      presetError = "Couldn't delete the preset.";
+    } finally {
+      presetBusy = false;
     }
   }
 
@@ -400,7 +567,16 @@
   let lastSaved = ''; // serialized form of what the server has
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
 
-  async function saveSettings(): Promise<boolean> {
+  // All saves run strictly one-at-a-time through this chain. Without it, an
+  // in-flight autosave could complete AFTER a preset apply and clobber the
+  // just-applied settings (server-side) or the pill highlight (client-side).
+  let saveChain: Promise<boolean> = Promise.resolve(true);
+  function saveSettings(): Promise<boolean> {
+    saveChain = saveChain.then(doSaveSettings, doSaveSettings);
+    return saveChain;
+  }
+
+  async function doSaveSettings(): Promise<boolean> {
     // Never PUT before the initial load resolves — {settings: null} would
     // normalize to defaults server-side and wipe the user's saved sources.
     if (!settings) return true;
@@ -410,15 +586,24 @@
     }
     const body = JSON.stringify({ settings });
     if (body === lastSaved) return true;
-    const res = await fetch('/api/shuffle/settings', {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json' },
-      body,
-      // Survives an immediate navigation (e.g. tapping Back right after a toggle).
-      keepalive: true,
-    });
-    if (res.ok) lastSaved = body;
-    return res.ok;
+    try {
+      const res = await fetch('/api/shuffle/settings', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body,
+        // Survives an immediate navigation (e.g. tapping Back right after a toggle).
+        keepalive: true,
+      });
+      if (res.ok) {
+        lastSaved = body;
+        // The server dropped the preset link on this manual save (the settings
+        // diverged) — mirror that so the pill stops claiming the preset.
+        activePresetId = null;
+      }
+      return res.ok;
+    } catch {
+      return false;
+    }
   }
 
   // Auto-save: any edit persists after a short debounce — no explicit save step.
@@ -469,7 +654,162 @@
     >
       <ArrowLeft class="size-4.5" />
     </button>
-    <h1 class="text-xl font-extrabold">Shuffle settings</h1>
+    <h1 class="flex-1 text-xl font-extrabold">Shuffle settings</h1>
+
+    <!-- preset pill + dropdown (z-50: the pill stays clickable above the
+         close-on-outside-click backdrop, so tapping it again closes the menu) -->
+    <div class="relative z-50 flex-shrink-0">
+      <button
+        type="button"
+        data-testid="preset-pill"
+        aria-haspopup="menu"
+        aria-expanded={presetMenuOpen}
+        onclick={togglePresetMenu}
+        class="relative z-50 max-w-36 truncate rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors {presetMenuOpen ||
+        activePresetName
+          ? 'border-purple-400/40 bg-purple-500/20 text-purple-200'
+          : 'border-white/15 bg-white/[0.08] text-white/80'}"
+      >
+        {activePresetName ?? 'Presets'}
+        {presetMenuOpen ? '▴' : '▾'}
+      </button>
+
+      {#if presetMenuOpen}
+        <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+        <div class="fixed inset-0 z-40" onclick={() => (presetMenuOpen = false)} aria-hidden="true"></div>
+        <div
+          data-testid="preset-menu"
+          class="absolute right-0 top-full z-50 mt-2 w-64 rounded-2xl border border-white/10 bg-[#1a1a20] p-1.5 text-sm shadow-2xl shadow-black/60"
+        >
+          {#if presetError}
+            <p class="px-3 py-1.5 text-xs text-red-400">{presetError}</p>
+          {/if}
+          {#if presets.length === 0}
+            <p class="px-3 py-2 text-xs text-white/40">No presets yet — save the current settings below.</p>
+          {/if}
+          {#each presets as p (p.id)}
+            <div>
+              <div class="flex items-center">
+                <button
+                  type="button"
+                  data-testid="preset-row"
+                  onclick={() => applyPreset(p.id)}
+                  class="flex min-w-0 flex-1 items-center gap-2 rounded-xl px-3 py-2.5 text-left transition-colors {p.id ===
+                  activePresetId
+                    ? 'bg-purple-500/15 font-semibold text-purple-200'
+                    : 'text-white/80 hover:bg-white/[0.06]'}"
+                >
+                  <span class="truncate">{p.name}</span>
+                  {#if p.id === activePresetId}<Check class="size-3.5 flex-shrink-0" />{/if}
+                </button>
+                <button
+                  type="button"
+                  aria-label="Actions for {p.name}"
+                  data-testid="preset-actions"
+                  onclick={() => {
+                    presetActionsId = presetActionsId === p.id ? null : p.id;
+                    presetEditing = null;
+                  }}
+                  class="px-2 text-white/40"
+                >
+                  ⋯
+                </button>
+              </div>
+              {#if presetActionsId === p.id}
+                {#if presetEditing === p.id}
+                  <div class="flex gap-1.5 px-2 pb-2">
+                    <!-- svelte-ignore a11y_autofocus -->
+                    <input
+                      type="text"
+                      data-testid="preset-name-input"
+                      bind:value={presetNameInput}
+                      autofocus
+                      onkeydown={(e) => e.key === 'Enter' && renamePreset(p.id)}
+                      class="min-w-0 flex-1 rounded-lg border border-white/15 bg-black/30 px-2.5 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-purple-400/50"
+                    />
+                    <button
+                      type="button"
+                      data-testid="preset-name-save"
+                      onclick={() => renamePreset(p.id)}
+                      class="rounded-lg bg-purple-500/30 px-3 text-xs font-semibold text-purple-200"
+                    >
+                      Save
+                    </button>
+                  </div>
+                {:else}
+                  <div class="flex gap-1 px-2 pb-2 text-[11px]">
+                    <button
+                      type="button"
+                      data-testid="preset-resave"
+                      onclick={() => resavePreset(p.id)}
+                      class="rounded-lg bg-white/[0.06] px-2.5 py-1.5 text-white/70"
+                    >
+                      Re-save current
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="preset-rename"
+                      onclick={() => {
+                        presetEditing = p.id;
+                        presetNameInput = p.name;
+                      }}
+                      class="rounded-lg bg-white/[0.06] px-2.5 py-1.5 text-white/70"
+                    >
+                      Rename
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="preset-delete"
+                      onclick={() => deletePreset(p.id)}
+                      class="rounded-lg bg-red-500/10 px-2.5 py-1.5 text-red-300"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                {/if}
+              {/if}
+            </div>
+          {/each}
+          <div class="my-1 h-px bg-white/10"></div>
+          {#if presetEditing === 'save-as'}
+            <div class="flex gap-1.5 p-1.5">
+              <!-- svelte-ignore a11y_autofocus -->
+              <input
+                type="text"
+                data-testid="preset-name-input"
+                bind:value={presetNameInput}
+                placeholder="Preset name"
+                autofocus
+                onkeydown={(e) => e.key === 'Enter' && savePresetAs()}
+                class="min-w-0 flex-1 rounded-lg border border-white/15 bg-black/30 px-2.5 py-1.5 text-xs placeholder:text-white/30 focus:outline-none focus:ring-1 focus:ring-purple-400/50"
+              />
+              <button
+                type="button"
+                data-testid="preset-name-save"
+                onclick={savePresetAs}
+                disabled={presetBusy}
+                class="rounded-lg bg-purple-500/30 px-3 text-xs font-semibold text-purple-200 disabled:opacity-40"
+              >
+                Save
+              </button>
+            </div>
+          {:else}
+            <button
+              type="button"
+              data-testid="preset-save-as"
+              onclick={() => {
+                presetEditing = 'save-as';
+                presetNameInput = '';
+                presetActionsId = null;
+              }}
+              class="w-full rounded-xl px-3 py-2.5 text-left text-white/50 transition-colors hover:bg-white/[0.06]"
+            >
+              ＋ Save current as…
+            </button>
+          {/if}
+        </div>
+      {/if}
+    </div>
   </header>
 
   <!-- tabs -->

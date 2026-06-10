@@ -5,6 +5,7 @@ import { ratings } from '$lib/server/db/schema';
 import { and, eq } from 'drizzle-orm';
 import { findRatingByUriOrIsrc, isrcForUri } from '$lib/server/ratings';
 import { autoEnrichIfBehind } from '$lib/server/shuffle/enrichment';
+import { ensureSavedTrack } from '$lib/server/spotify-library';
 
 const TRACK_URI_RE = /^spotify:track:[A-Za-z0-9]{22}$/;
 
@@ -68,6 +69,10 @@ export const PUT: RequestHandler = async ({ locals, request }) => {
   // A fresh rating may reference a never-enriched track; catch the backfill up
   // in the background (guarded + cooldown inside autoEnrichIfBehind).
   void autoEnrichIfBehind(locals.user.id);
+
+  // 2+ stars -> mirror into Spotify Liked Songs (skips already-liked tracks;
+  // best-effort, never blocks or fails the rating). Downgrades don't remove.
+  if (ratingStars >= 2) void ensureSavedTrack(locals.user.id, spotifyTrackUri);
 
   return json({ ok: true, ratingStars });
 };

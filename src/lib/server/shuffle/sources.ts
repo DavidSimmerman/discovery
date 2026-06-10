@@ -9,8 +9,9 @@
 //   loadCandidates    — DB reads + assembly, safe inside the lock.
 //   mergeCandidates   — pure mode/dedupe rules, unit-testable in isolation.
 
-import { inArray, eq } from 'drizzle-orm';
-import { ratings, trackLabels, tracks } from '$lib/server/db/schema';
+import { inArray, eq, and, gte, isNull, max, countDistinct } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
+import { ratings, trackLabels, trackSimilars, tracks } from '$lib/server/db/schema';
 import type { PlaylistTrack } from '$lib/server/spotify';
 import { getPlaylistSnapshotCached, getPlaylistTracksCached } from './playlist-cache';
 import { applyFilters } from './filters';
@@ -29,6 +30,19 @@ export type PrefetchedPlaylists = {
   playlists: { mode: PlaylistSourceMode; tracks: PlaylistTrack[] }[];
   skippedPlaylists: string[];
 };
+
+// One row of the discovery pool: a similar-to-a-favorite track the user
+// hasn't rated. isrc/meta come from the tracks table when we know the track.
+export type DiscoveryRow = {
+  uri: string;
+  match: number | null;
+  isrc?: string | null;
+  meta: TrackMeta | null;
+};
+
+// Stars a track needs before its Last.fm similars seed the discovery pool —
+// matches the enrichment cutoff that populates track_similars in the first place.
+export const DISCOVERY_SEED_MIN_STARS = 4;
 
 // Spotify IO only — resolve snapshot ids and pull track lists (both cached).
 // A playlist that fails to load (deleted, scope missing, Spotify hiccup) is
@@ -74,6 +88,8 @@ export function mergeCandidates(args: {
   ratingByIsrc?: Map<string, number>;
   // tracks-table metadata for URIs we've seen before (enrichment)
   metaByUri: Map<string, TrackMeta>;
+  // discovery pool (already similar-to-favorites); rated/seen URIs drop here
+  discovery?: DiscoveryRow[];
 }): Candidate[] {
   const out: Candidate[] = [];
   const seen = new Set<string>();
@@ -114,7 +130,54 @@ export function mergeCandidates(args: {
     }
   }
 
+  // Discovery is strictly "new to you": anything rated (by URI or ISRC) or
+  // already contributed by another source is dropped, not flagged.
+  for (const d of args.discovery ?? []) {
+    if (seen.has(d.uri)) continue;
+    if (args.ratingByUri.has(d.uri)) continue;
+    if (d.isrc != null && args.ratingByIsrc?.has(d.isrc)) continue;
+    seen.add(d.uri);
+    out.push({
+      uri: d.uri,
+      tier: 'unrated',
+      rating: null,
+      artistIds: d.meta?.primaryArtistId ? [d.meta.primaryArtistId] : [],
+      genres: d.meta?.genres ?? [],
+      versionType: d.meta?.versionType ?? null,
+      explicit: d.meta?.explicit ?? null,
+      discovery: true,
+      matchScore: d.match,
+    });
+  }
+
   return out;
+}
+
+// Size of the discovery pool for the settings card: distinct similars of the
+// user's favorite tracks, minus anything they've already rated by URI. (The
+// loader also drops ISRC-relinked dupes; close enough for a display count.)
+export async function discoveryPoolCount(
+  tx: Pick<DbExec, 'select'>,
+  userId: string,
+): Promise<number> {
+  const mine = alias(ratings, 'mine');
+  const rows = await tx
+    .select({ n: countDistinct(trackSimilars.similarUri) })
+    .from(trackSimilars)
+    .innerJoin(
+      ratings,
+      and(
+        eq(ratings.spotifyTrackUri, trackSimilars.spotifyTrackUri),
+        eq(ratings.userId, userId),
+        gte(ratings.ratingStars, DISCOVERY_SEED_MIN_STARS),
+      ),
+    )
+    .leftJoin(
+      mine,
+      and(eq(mine.spotifyTrackUri, trackSimilars.similarUri), eq(mine.userId, userId)),
+    )
+    .where(isNull(mine.spotifyTrackUri));
+  return rows[0]?.n ?? 0;
 }
 
 // DB reads + assembly + hard filters. Safe inside the session lock — no
@@ -176,6 +239,62 @@ export async function loadCandidates(
     }
   }
 
+  // Discovery pool: distinct similars of the user's favorite tracks. Rated
+  // and duplicate URIs are dropped in mergeCandidates (it has the rating maps).
+  let discovery: DiscoveryRow[] = [];
+  if (sources.discovery) {
+    const simRows = await tx
+      .select({
+        uri: trackSimilars.similarUri,
+        match: max(trackSimilars.matchScore),
+      })
+      .from(trackSimilars)
+      .innerJoin(
+        ratings,
+        and(
+          eq(ratings.spotifyTrackUri, trackSimilars.spotifyTrackUri),
+          eq(ratings.userId, userId),
+          gte(ratings.ratingStars, DISCOVERY_SEED_MIN_STARS),
+        ),
+      )
+      .groupBy(trackSimilars.similarUri);
+
+    // Whatever the tracks table already knows about these URIs (isrc for
+    // rated-recording dedupe, metadata for the hard filters).
+    const discMeta = new Map<string, { isrc: string | null; meta: TrackMeta }>();
+    const simUris = simRows.map((r) => r.uri);
+    if (simUris.length > 0) {
+      const rows = await tx
+        .select({
+          uri: tracks.spotifyTrackUri,
+          isrc: tracks.isrc,
+          primaryArtistId: tracks.primaryArtistId,
+          genres: tracks.genres,
+          versionType: tracks.versionType,
+          explicit: tracks.explicit,
+        })
+        .from(tracks)
+        .where(inArray(tracks.spotifyTrackUri, simUris));
+      for (const m of rows) {
+        discMeta.set(m.uri, {
+          isrc: m.isrc,
+          meta: {
+            primaryArtistId: m.primaryArtistId,
+            genres: m.genres,
+            versionType: m.versionType,
+            explicit: m.explicit,
+          },
+        });
+      }
+    }
+    discovery = simRows.map((r) => ({
+      uri: r.uri,
+      match: r.match,
+      isrc: discMeta.get(r.uri)?.isrc ?? null,
+      meta: discMeta.get(r.uri)?.meta ?? null,
+    }));
+  }
+
   const merged = mergeCandidates({
     libraryRows: sources.library
       ? ratedRows.map((r) => ({
@@ -193,6 +312,7 @@ export async function loadCandidates(
     ratingByUri,
     ratingByIsrc,
     metaByUri,
+    discovery,
   });
 
   // Label map only when a label filter OR a label boost is active — it's a

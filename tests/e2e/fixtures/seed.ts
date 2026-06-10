@@ -332,6 +332,47 @@ export async function cleanupLibrary(workerIndex: number): Promise<void> {
   await sql`DELETE FROM tracks WHERE spotify_track_uri = ANY(${libraryTrackUris(workerIndex)})`;
 }
 
+// --- Discovery seed (track_similars) ----------------------------------------
+// Similars hang off the worker's library tracks; the table is not user-scoped
+// and doesn't cascade, so cleanup deletes by the seeding tracks' URIs.
+
+export function discoveryTrackUri(workerIndex: number, i: number): string {
+  const id = `DISC${String(workerIndex).padStart(2, '0')}${String(i).padStart(4, '0')}`
+    .padEnd(22, '0')
+    .slice(0, 22);
+  return `spotify:track:${id}`;
+}
+
+/**
+ * Discovery pool fixture, exercising every rule of the loader:
+ *   - two fresh similars off the 5★/4★ seeds → the pool (dupe similar collapses)
+ *   - a similar that's already rated → excluded
+ *   - a similar seeded only by a 3★ track → below the 4★ seed cutoff, excluded
+ * Net pool for the worker: 2 tracks.
+ */
+export async function seedSimilars(workerIndex: number): Promise<void> {
+  const sql = getDb();
+  const rows = [
+    { from: trackUri(workerIndex, 0), to: discoveryTrackUri(workerIndex, 0), match: 0.9 },
+    { from: trackUri(workerIndex, 0), to: discoveryTrackUri(workerIndex, 1), match: 0.6 },
+    { from: trackUri(workerIndex, 1), to: discoveryTrackUri(workerIndex, 0), match: 0.8 },
+    { from: trackUri(workerIndex, 1), to: trackUri(workerIndex, 2), match: 0.7 },
+    { from: trackUri(workerIndex, 2), to: discoveryTrackUri(workerIndex, 2), match: 0.9 },
+  ];
+  for (const r of rows) {
+    await sql`
+      INSERT INTO track_similars (spotify_track_uri, similar_uri, match_score)
+      VALUES (${r.from}, ${r.to}, ${r.match})
+      ON CONFLICT DO NOTHING
+    `;
+  }
+}
+
+export async function cleanupSimilars(workerIndex: number): Promise<void> {
+  const sql = getDb();
+  await sql`DELETE FROM track_similars WHERE spotify_track_uri = ANY(${libraryTrackUris(workerIndex)})`;
+}
+
 // --- History seed (recent plays) -------------------------------------------
 // Seeds the local `plays` log so the History view can be exercised without a
 // Spotify token (the view degrades to in-app plays when none is present). Adds

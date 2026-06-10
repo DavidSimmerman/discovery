@@ -7,7 +7,7 @@ import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { db } from '$lib/server/db';
 import { effectiveSamplerConfig, normalizeSettings, poolSides } from '$lib/server/shuffle/config';
-import { baseScore } from '$lib/server/shuffle/sampler';
+import { baseScore, sliderZeroed } from '$lib/server/shuffle/sampler';
 import { loadCandidates, prefetchPlaylists } from '$lib/server/shuffle/sources';
 import { getValidAccessToken } from '$lib/server/tokens';
 
@@ -34,8 +34,12 @@ export const POST: RequestHandler = async ({ locals, request }) => {
   // Weight-0 knobs (tier bars / boost sliders at "never", mix-zeroed sides)
   // are permanent excludes, so they must come out of the advertised count.
   // Temporal gates (cooldowns, daily cap) stay in: those tracks are still part
-  // of the pool, just not eligible right now.
+  // of the pool, just not eligible right now. Discovery candidates bypass
+  // mix/tier scoring — they count whenever their dial is above 0.
   const cfg = effectiveSamplerConfig(settings, poolSides(settings.sources, settings.filters.rating.mode));
-  const count = candidates.filter((c) => baseScore(c, cfg) > 0).length;
+  const discoveryOn = (cfg.discovery?.pct ?? 0) > 0;
+  const count = candidates.filter((c) =>
+    c.discovery ? discoveryOn && !sliderZeroed(c, cfg) : baseScore(c, cfg) > 0,
+  ).length;
   return json({ count });
 };

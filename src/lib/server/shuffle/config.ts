@@ -23,6 +23,9 @@ export type ShuffleSources = {
   // The user's rated discovery library (current default pool).
   library: boolean;
   playlists: PlaylistSource[];
+  // Discovery mode: unheard tracks similar to the user's favorites
+  // (track_similars), mixed in via the sampler's discovery slot.
+  discovery: boolean;
 };
 
 // Hard include/exclude filters, applied as a candidate pre-filter (see
@@ -71,7 +74,7 @@ export function defaultFilters(): ShuffleFilters {
 
 export function defaultSettings(): ShuffleSettings {
   return {
-    sources: { library: true, playlists: [] },
+    sources: { library: true, playlists: [], discovery: false },
     filters: defaultFilters(),
     sampler: structuredClone(DEFAULT_SAMPLER_CONFIG),
   };
@@ -88,9 +91,9 @@ export function normalizeSettings(raw: unknown): ShuffleSettings {
   // Bare SamplerConfig: has sampler fields at the top level, no `sources`.
   if (!('sources' in obj) && 'mix' in obj && 'tierWeights' in obj) {
     return {
-      sources: { library: true, playlists: [] },
+      sources: { library: true, playlists: [], discovery: false },
       filters: defaultFilters(),
-      sampler: obj as SamplerConfig,
+      sampler: normalizeDiscoveryPct(obj as SamplerConfig),
     };
   }
 
@@ -109,10 +112,21 @@ export function normalizeSettings(raw: unknown): ShuffleSettings {
     sources: {
       library: typeof sources.library === 'boolean' ? sources.library : def.sources.library,
       playlists,
+      discovery: typeof sources.discovery === 'boolean' ? sources.discovery : false,
     },
     filters: normalizeFilters(obj.filters),
-    sampler: isSamplerConfig(obj.sampler) ? obj.sampler : def.sampler,
+    sampler: isSamplerConfig(obj.sampler) ? normalizeDiscoveryPct(obj.sampler) : def.sampler,
   };
+}
+
+// The discovery dial arrived after sampler blobs were already in the wild:
+// missing → stock pct, malformed → stock pct, number → clamped 0..100.
+function normalizeDiscoveryPct(s: SamplerConfig): SamplerConfig {
+  const pct = (s.discovery as { pct?: unknown } | undefined)?.pct;
+  if (typeof pct === 'number' && Number.isFinite(pct)) {
+    return { ...s, discovery: { pct: Math.max(0, Math.min(100, pct)) } };
+  }
+  return { ...s, discovery: structuredClone(DEFAULT_SAMPLER_CONFIG.discovery) };
 }
 
 // Per-field fold of a persisted/PUT filters blob — anything malformed drops to
@@ -196,7 +210,12 @@ export type PoolSides = {
 // ask, so the unrated side is demanded (and vice versa). Without folding the
 // filter in here, the stock mix (unratedPct: 0) would zero out a pool the user
 // filtered to unrated on purpose.
-export function poolSides(sources: ShuffleSources, ratingMode: RatingFilterMode = 'both'): PoolSides {
+// Note the Pick: the discovery source has no rated/unrated say — its
+// candidates bypass the mix entirely (see the sampler's discovery slot).
+export function poolSides(
+  sources: Pick<ShuffleSources, 'library' | 'playlists'>,
+  ratingMode: RatingFilterMode = 'both',
+): PoolSides {
   const sides: PoolSides = {
     allowsRated: sources.library,
     allowsUnrated: false,

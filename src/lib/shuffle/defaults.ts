@@ -12,6 +12,8 @@ export const DEFAULT_SAMPLER_CONFIG: SamplerConfig = {
     cooldownTime: { enabled: true, hours: 6 },
     dailyCap: { enabled: false, max: 2 },
   },
+  // ~1 in 10 picks comes from the discovery pool (when the source is on).
+  discovery: { pct: 10 },
   recency: {
     '5': { curve: 'log', halfLifePicks: 80 },
     '4': { curve: 'exp', halfLifePicks: 40 },

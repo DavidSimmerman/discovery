@@ -459,19 +459,39 @@ async function enrichSimilars(accessToken: string, t: SpotifyTrack): Promise<voi
   const similars = await fetchSimilarTracks(artist, t.name, 30);
   if (similars.length === 0) return;
 
-  const resolved: Array<{ uri: string; match: number }> = [];
+  const resolved: Array<{ track: SpotifyTrack; match: number }> = [];
   for (const s of similars) {
-    const uri = await searchTrack(accessToken, s.artist, s.title);
-    if (uri) resolved.push({ uri, match: s.matchScore });
+    const track = await searchTrack(accessToken, s.artist, s.title);
+    if (track) resolved.push({ track, match: s.matchScore });
   }
   if (resolved.length === 0) return;
+
+  // Persist a minimal tracks row for each similar: discovery-mode dedupe
+  // (ISRC vs the user's ratings) and hard filters (explicit, artist) need this
+  // metadata at candidate-load time, when no Spotify IO is allowed.
+  await db
+    .insert(tracks)
+    .values(
+      resolved.map(({ track: s }) => ({
+        spotifyTrackUri: s.uri,
+        isrc: s.external_ids?.isrc ?? null,
+        title: s.name,
+        artists: s.artists.map((a) => a.name),
+        album: s.album?.name ?? null,
+        albumArtUrl: largestAlbumArtUrl(s),
+        durationMs: s.duration_ms,
+        explicit: s.explicit ?? null,
+        primaryArtistId: s.artists[0]?.id ?? null,
+      })),
+    )
+    .onConflictDoNothing();
 
   await db
     .insert(trackSimilars)
     .values(
       resolved.map((r) => ({
         spotifyTrackUri: t.uri,
-        similarUri: r.uri,
+        similarUri: r.track.uri,
         matchScore: r.match,
       })),
     )

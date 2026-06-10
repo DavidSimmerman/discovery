@@ -25,6 +25,7 @@
 
   let settings = $state<ShuffleSettings | null>(null);
   let libraryCount = $state(0);
+  let discoveryCount = $state(0);
   let loadError = $state<string | null>(null);
 
   // ---- playlist catalogue (picker) ------------------------------------------
@@ -89,6 +90,7 @@
       settings = json.settings;
       lastSaved = JSON.stringify({ settings: json.settings }); // seed: no save for what we just loaded
       libraryCount = json.libraryCount;
+      discoveryCount = json.discoveryCount ?? 0;
       // Counts for already-selected playlists power the CTA total.
       if (json.settings.sources.playlists.length > 0) {
         void loadStats(json.settings.sources.playlists.map((p: { id: string }) => p.id));
@@ -101,6 +103,11 @@
   function toggleLibrary() {
     if (!settings) return;
     settings.sources.library = !settings.sources.library;
+  }
+
+  function toggleDiscovery() {
+    if (!settings) return;
+    settings.sources.discovery = !settings.sources.discovery;
   }
 
   function setMode(id: string, mode: PlaylistSourceMode) {
@@ -344,6 +351,13 @@
     settings.sampler.tierWeights = def.tierWeights;
     settings.sampler.filters = def.filters;
     settings.sampler.gates = def.gates;
+    settings.sampler.discovery = def.discovery;
+  }
+
+  function discoveryAmountLabel(pct: number): string {
+    if (pct <= 0) return 'off';
+    if (pct >= 100) return 'every song';
+    return `~1 in ${Math.round(100 / pct)} songs`;
   }
 
   // ---- live CTA count (exact, server-computed) ---------------------------------
@@ -374,7 +388,9 @@
 
   const canShuffle = $derived(
     settings != null &&
-      (settings.sources.library || settings.sources.playlists.length > 0) &&
+      (settings.sources.library ||
+        settings.sources.playlists.length > 0 ||
+        settings.sources.discovery) &&
       (previewCount == null || previewCount > 0 || previewPending),
   );
 
@@ -505,6 +521,38 @@
             : 'border border-white/25'}"
         >
           {#if settings.sources.library}<Check class="size-3.5" strokeWidth={3} />{/if}
+        </div>
+      </button>
+
+      <!-- Discovery mode -->
+      <button
+        type="button"
+        data-testid="source-discovery"
+        onclick={toggleDiscovery}
+        class="flex w-full items-center gap-3 rounded-2xl p-3 text-left transition-colors {settings
+          .sources.discovery
+          ? 'border border-purple-400/40 bg-purple-500/[0.07]'
+          : 'bg-white/[0.04] hover:bg-white/[0.07]'}"
+      >
+        <span class="grid size-10 flex-shrink-0 place-items-center rounded-lg bg-white/[0.06]">
+          <Sparkles class="size-5 text-white/70" />
+        </span>
+        <div class="min-w-0 flex-1">
+          <div class="text-sm font-semibold">Discovery mode</div>
+          <div class="text-xs text-white/45">
+            {#if discoveryCount > 0}
+              New songs similar to your favorites · {discoveryCount.toLocaleString()}
+            {:else}
+              New songs not in your library — rate more songs 4★+ to grow the pool
+            {/if}
+          </div>
+        </div>
+        <div
+          class="grid size-5 flex-shrink-0 place-items-center rounded-md {settings.sources.discovery
+            ? 'bg-purple-500 text-white'
+            : 'border border-white/25'}"
+        >
+          {#if settings.sources.discovery}<Check class="size-3.5" strokeWidth={3} />{/if}
         </div>
       </button>
 
@@ -869,6 +917,33 @@
           {/if}
         </div>
       {/each}
+
+      <!-- discovery amount -->
+      <div class="rounded-2xl bg-white/[0.04] p-4" data-testid="weight-discovery">
+        <div class="mb-1 flex justify-between text-sm">
+          <span class="font-semibold">Discovery mode</span>
+          <span class="text-xs text-white/40" data-testid="weight-discovery-label">
+            {discoveryAmountLabel(settings.sampler.discovery?.pct ?? 0)}
+          </span>
+        </div>
+        <input
+          type="range"
+          min="0"
+          max="100"
+          step="5"
+          value={settings.sampler.discovery?.pct ?? 0}
+          aria-label="Discovery amount"
+          data-testid="weight-discovery-pct"
+          oninput={(e) =>
+            (settings!.sampler.discovery = { pct: Number(e.currentTarget.value) })}
+          class="mt-1 w-full accent-purple-500"
+        />
+        <p class="mt-1.5 text-[10px] text-white/30">
+          How often a brand-new song is mixed in{settings.sources.discovery
+            ? ''
+            : ' — needs the Discovery mode source on'}
+        </p>
+      </div>
 
       <!-- freshness -->
       <p class="mt-2 px-1 text-[11px] font-bold uppercase tracking-wide text-white/40">Freshness</p>

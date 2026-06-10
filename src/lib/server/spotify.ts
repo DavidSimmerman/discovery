@@ -354,20 +354,20 @@ export async function fetchPlaylistTracks(
   return out;
 }
 
-// Resolve a Last.fm (artist, title) pair to a Spotify URI via /v1/search.
-// Returns null when nothing plausible matches.
+// Resolve a Last.fm (artist, title) pair to a Spotify track via /v1/search.
+// Returns the full track object — callers persist its isrc/metadata, not just
+// the URI — or null when nothing plausible matches.
 export async function searchTrack(
   accessToken: string,
   artist: string,
   title: string,
-): Promise<string | null> {
+): Promise<SpotifyTrack | null> {
   const q = `track:"${title.replace(/"/g, '')}" artist:"${artist.replace(/"/g, '')}"`;
   const url = `https://api.spotify.com/v1/search?type=track&limit=1&q=${encodeURIComponent(q)}`;
   const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
   if (!res.ok) return null;
   const json = await res.json();
-  const item = json.tracks?.items?.[0];
-  return item?.uri ?? null;
+  return (json.tracks?.items?.[0] as SpotifyTrack | undefined) ?? null;
 }
 
 // Multi-result search. `query` is a raw Spotify search expression — the caller

@@ -30,6 +30,12 @@ export type Candidate = {
   // The user's own track labels (label ids). Only populated when label
   // weighting/filtering is active — loading them is a per-user table scan.
   labels?: string[];
+  // Discovery-mode candidate: a track the user has never rated, suggested by
+  // similarity to their favorites. Playable only through the discovery slot
+  // (config.discovery.pct), never through the regular pool.
+  discovery?: boolean;
+  // Last.fm similarity 0..1; weights the in-slot sample. null → middling 0.5.
+  matchScore?: number | null;
 };
 
 export type SamplerState = {
@@ -73,6 +79,10 @@ export type SamplerConfig = {
     dailyCap: { enabled: boolean; max: number };
   };
   recency: Record<RatingTier, RecencyCurve>;
+  // Chance (0..100) that a pick comes from the discovery pool instead of the
+  // regular one. Optional: blobs persisted before discovery existed lack it,
+  // which reads as 0 (off).
+  discovery?: { pct: number };
 };
 
 // Neutral slider value. Used so filterWeight / 50 = 1.0 at "no opinion".
@@ -106,24 +116,34 @@ export function applyMixSplit(pool: Candidate[], cfg: SamplerConfig): Candidate[
   });
 }
 
+// Slider=0 on any axis the candidate touches = the user's permanent "never".
+// Split out of gateOk so the preview count can apply the same permanent
+// excludes without needing sampler state (it ignores the temporal gates).
+export function sliderZeroed(c: Candidate, cfg: SamplerConfig): boolean {
+  if (sliderFor(cfg.filters.versionTypes, c.versionType) === 0) return true;
+  for (const a of c.artistIds) {
+    if (sliderFor(cfg.filters.artists, a) === 0) return true;
+  }
+  for (const g of c.genres) {
+    if (sliderFor(cfg.filters.genres, g) === 0) return true;
+  }
+  for (const l of c.labels ?? []) {
+    if (sliderFor(cfg.filters.labels, l) === 0) return true;
+  }
+  return false;
+}
+
 export function gateOk(
   c: Candidate,
   state: SamplerState,
   cfg: SamplerConfig,
   now: number,
 ): boolean {
-  // Slider=0 on any axis = hard exclude. Cheap; do first.
-  if (cfg.tierWeights[c.tier] === 0) return false;
-  if (sliderFor(cfg.filters.versionTypes, c.versionType) === 0) return false;
-  for (const a of c.artistIds) {
-    if (sliderFor(cfg.filters.artists, a) === 0) return false;
-  }
-  for (const g of c.genres) {
-    if (sliderFor(cfg.filters.genres, g) === 0) return false;
-  }
-  for (const l of c.labels ?? []) {
-    if (sliderFor(cfg.filters.labels, l) === 0) return false;
-  }
+  // Hard excludes first — cheap. Discovery candidates skip the tier gate:
+  // they're all 'unrated', and the discovery dial — not the unrated tier
+  // bar — owns whether they play.
+  if (!c.discovery && cfg.tierWeights[c.tier] === 0) return false;
+  if (sliderZeroed(c, cfg)) return false;
 
   if (cfg.gates.cooldownCount.enabled) {
     const n = cfg.gates.cooldownCount.n;
@@ -276,6 +296,7 @@ export type PickResult = {
     eligibleSize: number;
     winnerScore: number;
     relaxed: Relaxation;
+    slot?: 'regular' | 'discovery';
   };
 };
 
@@ -288,18 +309,31 @@ const RELAXED_WEIGHT_FLOOR = 1e-6;
 
 export function pickNext(input: PickInput): PickResult {
   const { candidates, state, config, now, rng } = input;
-  const mixed = applyMixSplit(candidates, config);
+  // Discovery candidates live outside the regular pool: the dial (pct) is the
+  // only thing that lets them in, and the mix/tier knobs don't apply to them.
+  const discoveryPct = Math.max(0, Math.min(100, config.discovery?.pct ?? 0));
+  const discoveryPool = discoveryPct > 0 ? candidates.filter((c) => c.discovery) : [];
+  const mixed = applyMixSplit(
+    candidates.filter((c) => !c.discovery),
+    config,
+  );
 
   let eligible = mixed.filter((c) => gateOk(c, state, config, now));
+  let discEligible = discoveryPool.filter((c) => gateOk(c, state, config, now));
   let relaxed: Relaxation = 'none';
   let activeConfig = config;
-  for (let i = 0; eligible.length === 0 && i < RELAX_ORDER.length; i++) {
+  for (
+    let i = 0;
+    eligible.length === 0 && discEligible.length === 0 && i < RELAX_ORDER.length;
+    i++
+  ) {
     relaxed = RELAX_ORDER[i];
     activeConfig = relaxConfig(config, relaxed);
     eligible = mixed.filter((c) => gateOk(c, state, activeConfig, now));
+    discEligible = discoveryPool.filter((c) => gateOk(c, state, activeConfig, now));
   }
 
-  if (eligible.length === 0) {
+  if (eligible.length === 0 && discEligible.length === 0) {
     return {
       uri: null,
       debug: { poolSize: candidates.length, eligibleSize: 0, winnerScore: 0, relaxed },
@@ -307,12 +341,49 @@ export function pickNext(input: PickInput): PickResult {
   }
 
   const floor = relaxed === 'none' ? 0 : RELAXED_WEIGHT_FLOOR;
+
+  const sampleDiscovery = (): PickResult | null => {
+    const scored = discEligible.map((c) => {
+      // Match score is the base weight; a tiny floor keeps score-0/legacy rows
+      // pickable. Recency damps replays via the unrated curve, same as ever.
+      const b = Math.max(c.matchScore ?? 0.5, 1e-3);
+      const r = recencyMultiplier(c, state, activeConfig);
+      return { uri: c.uri, weight: Math.max(b * r, floor) };
+    });
+    const winner = weightedSample(scored, rng);
+    if (winner == null) return null;
+    return {
+      uri: winner,
+      debug: {
+        poolSize: candidates.length,
+        eligibleSize: discEligible.length,
+        winnerScore: scored.find((s) => s.uri === winner)?.weight ?? 0,
+        relaxed,
+        slot: 'discovery',
+      },
+    };
+  };
+
+  // Slot roll: when both pools are live, pct decides; an empty pool cedes the
+  // pick to the other (the dial sets frequency, not a hard reservation).
+  const useDiscovery =
+    discEligible.length > 0 && (eligible.length === 0 || rng() * 100 < discoveryPct);
+  if (useDiscovery) {
+    const picked = sampleDiscovery();
+    if (picked) return picked;
+  }
+
   const scored = eligible.map((c) => {
     const b = baseScore(c, activeConfig);
     const r = recencyMultiplier(c, state, activeConfig);
     return { uri: c.uri, weight: Math.max(b * r, b > 0 ? floor : 0) };
   });
   const winner = weightedSample(scored, rng);
+  if (winner == null && discEligible.length > 0) {
+    // Regular pool turned out unsamplable (all weights 0) — discovery covers.
+    const picked = sampleDiscovery();
+    if (picked) return picked;
+  }
   const winnerScore = winner ? (scored.find((s) => s.uri === winner)?.weight ?? 0) : 0;
   return {
     uri: winner,
@@ -321,6 +392,7 @@ export function pickNext(input: PickInput): PickResult {
       eligibleSize: eligible.length,
       winnerScore,
       relaxed,
+      slot: winner ? 'regular' : undefined,
     },
   };
 }

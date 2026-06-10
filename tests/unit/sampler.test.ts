@@ -190,6 +190,108 @@ describe('baseScore', () => {
   });
 });
 
+describe('discovery slot', () => {
+  // rng stub yielding a fixed sequence (slot roll first, then weighted sample).
+  const seq = (...vals: number[]) => {
+    let i = 0;
+    return () => vals[Math.min(i++, vals.length - 1)];
+  };
+  const disc = (uri: string, match = 1) =>
+    cand(uri, 'unrated', { discovery: true, matchScore: match });
+
+  it('picks a discovery track when the slot roll lands under pct', () => {
+    const result = pickNext({
+      candidates: [cand('r', '5'), disc('d')],
+      state: emptyState(),
+      config: defaultConfig({ discovery: { pct: 10 } }),
+      now: NOW,
+      rng: seq(0.05, 0.5), // roll 5 < 10 → discovery slot
+    });
+    expect(result.uri).toBe('d');
+    expect(result.debug?.slot).toBe('discovery');
+  });
+
+  it('picks from the regular pool when the roll lands above pct', () => {
+    const result = pickNext({
+      candidates: [cand('r', '5'), disc('d')],
+      state: emptyState(),
+      config: defaultConfig({ discovery: { pct: 10 } }),
+      now: NOW,
+      rng: seq(0.5, 0.5), // roll 50 ≥ 10 → regular
+    });
+    expect(result.uri).toBe('r');
+    expect(result.debug?.slot).toBe('regular');
+  });
+
+  it('never plays discovery candidates when pct is 0 or unset', () => {
+    for (const config of [defaultConfig({ discovery: { pct: 0 } }), defaultConfig()]) {
+      const result = pickNext({
+        candidates: [disc('d')],
+        state: emptyState(),
+        config,
+        now: NOW,
+        rng: seq(0.0),
+      });
+      expect(result.uri).toBeNull();
+    }
+  });
+
+  it('ignores the rated/unrated mix and unrated tier weight (the dial is authoritative)', () => {
+    const result = pickNext({
+      candidates: [disc('d')],
+      state: emptyState(),
+      config: defaultConfig({
+        discovery: { pct: 100 },
+        mix: { ratedPct: 100, unratedPct: 0 },
+        tierWeights: { '1': 0, '2': 10, '3': 30, '4': 70, '5': 100, unrated: 0 },
+      }),
+      now: NOW,
+      rng: seq(0.5, 0.5),
+    });
+    expect(result.uri).toBe('d');
+  });
+
+  it('falls back to discovery when the regular pool is empty, even above pct', () => {
+    const result = pickNext({
+      candidates: [disc('d')],
+      state: emptyState(),
+      config: defaultConfig({ discovery: { pct: 10 } }),
+      now: NOW,
+      rng: seq(0.99, 0.5),
+    });
+    expect(result.uri).toBe('d');
+    expect(result.debug?.slot).toBe('discovery');
+  });
+
+  it('falls back to the regular pool when every discovery track is cooling down', () => {
+    const result = pickNext({
+      candidates: [cand('r', '5'), disc('d')],
+      state: emptyState({
+        recentlyPlayed: ['d'],
+        recentlyPlayedAt: { d: NOW - 1000 },
+      }),
+      config: defaultConfig({ discovery: { pct: 100 } }),
+      now: NOW,
+      rng: seq(0.0, 0.5),
+    });
+    expect(result.uri).toBe('r');
+    expect(result.debug?.slot).toBe('regular');
+  });
+
+  it('weights the discovery sample by match score', () => {
+    // strong=0.9 vs weak=0.1 → cumulative weighted sample: a draw of 0.5
+    // (× total 1.0) lands inside the strong track's 0.9 span.
+    const result = pickNext({
+      candidates: [disc('strong', 0.9), disc('weak', 0.1)],
+      state: emptyState(),
+      config: defaultConfig({ discovery: { pct: 100 } }),
+      now: NOW,
+      rng: seq(0.0, 0.5),
+    });
+    expect(result.uri).toBe('strong');
+  });
+});
+
 describe('recencyMultiplier', () => {
   it('returns 1 for never-played candidates', () => {
     const c = cand('a', '5');

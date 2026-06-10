@@ -19,8 +19,15 @@ describe('normalizeSettings', () => {
 
   it('bare SamplerConfig (pre-sources rows) → wrapped with default sources', () => {
     const norm = normalizeSettings(DEFAULT_SAMPLER_CONFIG);
-    expect(norm.sources).toEqual({ library: true, playlists: [] });
+    expect(norm.sources).toEqual({ library: true, playlists: [], discovery: false });
     expect(norm.sampler).toEqual(DEFAULT_SAMPLER_CONFIG);
+  });
+
+  it('bare SamplerConfig without a discovery dial gets the stock pct', () => {
+    const legacy = { ...DEFAULT_SAMPLER_CONFIG, discovery: undefined };
+    expect(normalizeSettings(legacy).sampler.discovery).toEqual(
+      DEFAULT_SAMPLER_CONFIG.discovery,
+    );
   });
 
   it('full ShuffleSettings round-trips', () => {
@@ -28,11 +35,30 @@ describe('normalizeSettings', () => {
       sources: {
         library: false,
         playlists: [{ id: 'pl1', name: 'Imports', mode: 'unrated' }],
+        discovery: true,
       },
       filters: defaultSettings().filters,
       sampler: DEFAULT_SAMPLER_CONFIG,
     };
     expect(normalizeSettings(s)).toEqual(s);
+  });
+
+  it('defaults sources.discovery to false and folds the dial', () => {
+    const base = {
+      sources: { library: true, playlists: [] }, // pre-discovery blob
+      sampler: { ...DEFAULT_SAMPLER_CONFIG, discovery: undefined },
+    };
+    expect(normalizeSettings(base).sources.discovery).toBe(false);
+    // missing dial → stock pct
+    expect(normalizeSettings(base).sampler.discovery).toEqual(
+      DEFAULT_SAMPLER_CONFIG.discovery,
+    );
+    // out-of-range dial → clamped
+    const wild = {
+      ...base,
+      sampler: { ...DEFAULT_SAMPLER_CONFIG, discovery: { pct: 250 } },
+    };
+    expect(normalizeSettings(wild).sampler.discovery).toEqual({ pct: 100 });
   });
 
   it('replaces a malformed sampler blob with the default', () => {
@@ -209,6 +235,31 @@ describe('mergeCandidates', () => {
     expect(out[0].artistIds).toEqual(['a9']);
     expect(out[0].genres).toEqual(['folk']);
     expect(out[0].versionType).toBe('live');
+  });
+
+  it('discovery rows: rated (URI or ISRC) and already-pooled URIs drop, rest flag as discovery', () => {
+    const out = mergeCandidates({
+      libraryRows: [{ uri: 't:lib', rating: 5, meta }],
+      playlists: [],
+      ratingByUri: new Map([
+        ['t:lib', 5],
+        ['t:rated-elsewhere', 3],
+      ]),
+      ratingByIsrc: new Map([['USRC9', 4]]),
+      metaByUri: new Map(),
+      discovery: [
+        { uri: 't:lib', match: 0.9, isrc: null, meta: null }, // already in pool
+        { uri: 't:rated-elsewhere', match: 0.8, isrc: null, meta: null }, // rated by URI
+        { uri: 't:relinked', match: 0.7, isrc: 'USRC9', meta: null }, // rated by ISRC
+        { uri: 't:fresh', match: 0.6, isrc: null, meta: null },
+      ],
+    });
+    expect(out.map((c) => c.uri)).toEqual(['t:lib', 't:fresh']);
+    const fresh = out.find((c) => c.uri === 't:fresh')!;
+    expect(fresh.discovery).toBe(true);
+    expect(fresh.tier).toBe('unrated');
+    expect(fresh.matchScore).toBe(0.6);
+    expect(out.find((c) => c.uri === 't:lib')!.discovery).toBeUndefined();
   });
 
   it('treats a relinked URI as rated when its ISRC matches a rating', () => {

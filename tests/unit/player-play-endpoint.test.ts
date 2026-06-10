@@ -84,13 +84,15 @@ describe('PUT /api/spotify/player/play', () => {
     });
   });
 
-  it('maps 404 NO_ACTIVE_DEVICE', async () => {
+  it('maps 404 NO_ACTIVE_DEVICE without retrying when device_id was explicit', async () => {
     fetchMock.mockResolvedValueOnce(
       new Response(JSON.stringify({ error: { reason: 'NO_ACTIVE_DEVICE' } }), { status: 404 }),
     );
     const res = await PUT(makeEvent({ uris: ['spotify:track:1'], device_id: 'd' }));
     expect(res.status).toBe(409);
     expect(await res.json()).toEqual({ error: 'no_active_device' });
+    // Explicit target → the caller chose the device; no silent re-route.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('maps 403 PREMIUM_REQUIRED', async () => {
@@ -100,6 +102,58 @@ describe('PUT /api/spotify/player/play', () => {
     const res = await PUT(makeEvent({ uris: ['spotify:track:1'], device_id: 'd' }));
     expect(res.status).toBe(402);
     expect(await res.json()).toEqual({ error: 'premium_required' });
+  });
+
+  describe('silent device fallback (no active device, none targeted)', () => {
+    const NO_DEVICE = () =>
+      new Response(JSON.stringify({ error: { reason: 'NO_ACTIVE_DEVICE' } }), { status: 404 });
+    const DEVICES = (devices: unknown[]) =>
+      new Response(JSON.stringify({ devices }), { status: 200 });
+
+    it('retries the same payload on the best available device', async () => {
+      fetchMock
+        .mockResolvedValueOnce(NO_DEVICE())
+        .mockResolvedValueOnce(
+          DEVICES([
+            { id: 'laptop', is_active: false, is_restricted: false, name: 'Mac', type: 'Computer' },
+            { id: 'phone', is_active: false, is_restricted: false, name: 'iPhone', type: 'Smartphone' },
+          ]),
+        )
+        .mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+      const res = await PUT(makeEvent({ uris: ['spotify:track:1'], position_ms: 1000 }));
+      expect(res.status).toBe(204);
+
+      const [devicesUrl] = fetchMock.mock.calls[1] as [string];
+      expect(devicesUrl).toBe('https://api.spotify.com/v1/me/player/devices');
+
+      const [retryUrl, retryInit] = fetchMock.mock.calls[2] as [string, RequestInit];
+      expect(retryUrl).toBe('https://api.spotify.com/v1/me/player/play?device_id=phone');
+      expect(JSON.parse(retryInit.body as string)).toEqual({
+        uris: ['spotify:track:1'],
+        position_ms: 1000,
+      });
+    });
+
+    it('returns 409 when no devices are available', async () => {
+      fetchMock.mockResolvedValueOnce(NO_DEVICE()).mockResolvedValueOnce(DEVICES([]));
+      const res = await PUT(makeEvent({ uris: ['spotify:track:1'] }));
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({ error: 'no_active_device' });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('returns 409 when the retry also reports no active device', async () => {
+      fetchMock
+        .mockResolvedValueOnce(NO_DEVICE())
+        .mockResolvedValueOnce(
+          DEVICES([{ id: 'phone', is_active: false, is_restricted: false, name: 'iPhone', type: 'Smartphone' }]),
+        )
+        .mockResolvedValueOnce(NO_DEVICE());
+      const res = await PUT(makeEvent({ uris: ['spotify:track:1'] }));
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({ error: 'no_active_device' });
+    });
   });
 
   it('maps 429 with Retry-After', async () => {

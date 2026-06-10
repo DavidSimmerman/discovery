@@ -305,8 +305,12 @@
     }
   }
 
-  function playEntry(uri: string): void {
-    void playback.playTrack(uri, [uri]);
+  async function playEntry(uri: string): Promise<void> {
+    await playback.playTrack(uri, [uri]);
+    // No device anywhere -> play went pending; surface its card on Now Playing.
+    if (playback.pendingPlay && location.pathname !== '/now-playing') {
+      await goto('/now-playing');
+    }
   }
 
   function versionLabel(e: Entry): string {
@@ -425,7 +429,7 @@
               <button
                 type="button"
                 onclick={() => {
-                  if (v.rating == null) playEntry(v.uri);
+                  if (v.rating == null) void playEntry(v.uri);
                   else void goto(`/library/track/${encodeURIComponent(v.uri)}`);
                 }}
                 disabled={v.uri === trackUri}

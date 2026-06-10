@@ -1,5 +1,7 @@
 <script lang="ts">
   import { Shuffle, Sparkles } from '@lucide/svelte';
+  import { goto } from '$app/navigation';
+  import { page } from '$app/state';
   import type { PlaybackStore } from '$lib/playback/player.svelte';
 
   let {
@@ -28,10 +30,16 @@
         // Smart shuffle: hand Spotify a real context built from the sampler and
         // keep following it. reset:true so each press is a fresh queue.
         await store.startSampler({ reset: true });
-        return;
+      } else {
+        const uris = (await getUris?.()) ?? [];
+        if (uris.length > 0) await store.shuffle(uris);
       }
-      const uris = (await getUris?.()) ?? [];
-      if (uris.length > 0) await store.shuffle(uris);
+      // No device anywhere → the play went pending (server fires it when
+      // Spotify opens). The pending card lives on Now Playing; take the user
+      // there so the action has a visible result.
+      if (store.pendingPlay && page.url.pathname !== '/now-playing') {
+        await goto('/now-playing');
+      }
     } finally {
       loading = false;
     }

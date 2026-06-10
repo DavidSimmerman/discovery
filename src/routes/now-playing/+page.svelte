@@ -8,11 +8,15 @@
   import ShuffleButton from '$lib/components/ShuffleButton.svelte';
   import PremiumGate from '$lib/components/PremiumGate.svelte';
   import TabbedPanel from '$lib/components/TabbedPanel.svelte';
+  import PendingPlayCard from '$lib/components/PendingPlayCard.svelte';
+  import ResumeShuffleOffer from '$lib/components/ResumeShuffleOffer.svelte';
   import { getPlaybackStore } from '$lib/playback/player.svelte';
   import { SlidersHorizontal } from '@lucide/svelte';
 
   const playback = getPlaybackStore();
   const product = $derived(page.data.user?.product ?? 'open');
+  // True while the resume CHIP is visible — relabels Shuffle → "New shuffle".
+  let resumeOffered = $state(false);
 
   let error = $state<string | null>(null);
   let errorTimer: ReturnType<typeof setTimeout> | null = null;
@@ -100,12 +104,22 @@
     </div>
   {/if}
 
-  <NowPlaying
-    playing={playingForView}
-    rating={playback.currentRating}
-    loading={!playback.isReady && !playback.isActive}
-    onrate={handleRate}
-  />
+  {#if playingForView}
+    <!-- A foreign track is playing while an interrupted shuffle is parked
+         server-side — offer to take back over. Dismissible, session-scoped. -->
+    <ResumeShuffleOffer store={playback} variant="banner" />
+  {/if}
+
+  {#if !playingForView && playback.pendingPlay}
+    <PendingPlayCard store={playback} />
+  {:else}
+    <NowPlaying
+      playing={playingForView}
+      rating={playback.currentRating}
+      loading={!playback.isReady && !playback.isActive}
+      onrate={handleRate}
+    />
+  {/if}
 
   {#if playingForView}
     <PremiumGate {product}>
@@ -133,19 +147,26 @@
     </div>
   {/if}
 
-  <PremiumGate {product}>
-    <div class="flex items-center gap-2">
-      <ShuffleButton store={playback} sampler label="Shuffle" />
-      <a
-        href="/shuffle-settings"
-        aria-label="Shuffle settings"
-        data-testid="shuffle-settings-link"
-        class="inline-flex items-center gap-1.5 rounded-full border border-purple-400/40 bg-purple-500/15 px-3 py-1.5 text-xs backdrop-blur transition-colors hover:bg-purple-500/25"
-      >
-        <SlidersHorizontal class="size-3.5" />
-      </a>
-    </div>
-  </PremiumGate>
+  {#if !playback.pendingPlay}
+    <PremiumGate {product}>
+      <div class="flex flex-col items-center gap-2.5">
+        {#if !playingForView}
+          <ResumeShuffleOffer store={playback} variant="chip" bind:offered={resumeOffered} />
+        {/if}
+        <div class="flex items-center gap-2">
+          <ShuffleButton store={playback} sampler label={resumeOffered ? 'New shuffle' : 'Shuffle'} />
+          <a
+            href="/shuffle-settings"
+            aria-label="Shuffle settings"
+            data-testid="shuffle-settings-link"
+            class="inline-flex items-center gap-1.5 rounded-full border border-purple-400/40 bg-purple-500/15 px-3 py-1.5 text-xs backdrop-blur transition-colors hover:bg-purple-500/25"
+          >
+            <SlidersHorizontal class="size-3.5" />
+          </a>
+        </div>
+      </div>
+    </PremiumGate>
+  {/if}
 
   <div aria-live="polite" class="min-h-5 text-sm text-red-400">
     {#if error}{error}{/if}

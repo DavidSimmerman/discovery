@@ -65,8 +65,10 @@
     }
   }
 
-  function playNow() {
-    void playback.playTrack(data.track.uri, [data.track.uri]);
+  async function playNow() {
+    await playback.playTrack(data.track.uri, [data.track.uri]);
+    // No device anywhere -> play went pending; its card lives on Now Playing.
+    if (playback.pendingPlay) await goto('/now-playing');
   }
 </script>
 

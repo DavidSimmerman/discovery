@@ -6,12 +6,15 @@
 //   { type: 'trackChanged', track, rating, isPlaying }  — start/update the Live Activity
 //   { type: 'playbackStopped' }                          — confirmed nothing playing
 //   { type: 'ratingChanged', uri, rating }               — instant star update
-//   { type: 'deviceToken', token }                       — minted API token for the Keychain
+//   { type: 'deviceToken', token, userId }               — minted API token for the Keychain
 //   { type: 'deviceTokenError', status }                 — mint failed (e.g. not logged in)
+//   { type: 'sessionUser', userId|null }                 — who the cookie session belongs to
 //
 // Inbound (native → web): native evaluates
-//   window.__discoveryNative.requestDeviceToken(label?)
-// after page load to bootstrap its bearer token (cookie-authenticated mint).
+//   window.__discoveryNative.reportSession()             — on every page load
+//   window.__discoveryNative.requestDeviceToken(label?)  — when it needs a (new) token
+// The session report lets native detect logout/account switches and discard a
+// Keychain token bound to a different user before it writes to the wrong account.
 
 export interface NativeTrack {
   uri: string;
@@ -23,7 +26,10 @@ export interface NativeTrack {
 
 type WebkitWindow = Window & {
   webkit?: { messageHandlers?: { discovery?: { postMessage: (msg: unknown) => void } } };
-  __discoveryNative?: { requestDeviceToken: (label?: string) => Promise<void> };
+  __discoveryNative?: {
+    requestDeviceToken: (label?: string) => Promise<void>;
+    reportSession: () => Promise<void>;
+  };
 };
 
 function handler() {
@@ -88,10 +94,20 @@ export function installNativeHandlers(): void {
           post({ type: 'deviceTokenError', status: res.status });
           return;
         }
-        const { token } = await res.json();
-        post({ type: 'deviceToken', token });
+        const { token, userId } = await res.json();
+        post({ type: 'deviceToken', token, userId });
       } catch {
         post({ type: 'deviceTokenError', status: 0 });
+      }
+    },
+
+    async reportSession() {
+      try {
+        const res = await fetch('/api/me');
+        const userId = res.ok ? ((await res.json()).userId ?? null) : null;
+        post({ type: 'sessionUser', userId });
+      } catch {
+        post({ type: 'sessionUser', userId: null });
       }
     },
   };

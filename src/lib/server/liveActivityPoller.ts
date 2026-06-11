@@ -123,8 +123,14 @@ async function processRow(row: ActivityRow, deps: PollerDeps): Promise<void> {
   const decision = decidePollAction(row, current, deps.now());
 
   if (decision.end) {
-    await deps.push(row.apnsPushToken, current, { event: 'end' });
-    await deps.updateRow(row.id, { endedAt: deps.now() });
+    const res = await deps.push(row.apnsPushToken, current, { event: 'end' });
+    // Close the row when the end was delivered, the token is dead anyway, or
+    // APNs isn't configured (nothing will ever deliver). A transient failure
+    // (5xx, network) leaves the row active so the next tick retries the end.
+    const unrecoverable = !res.ok && res.reason === 'apns-not-configured';
+    if (res.ok || isDeadToken(res) || unrecoverable) {
+      await deps.updateRow(row.id, { endedAt: deps.now() });
+    }
     return;
   }
 

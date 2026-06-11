@@ -17,5 +17,6 @@ export const POST: RequestHandler = async ({ locals, cookies, request }) => {
   const body = await request.json().catch(() => ({}));
   const label = typeof body?.label === 'string' ? body.label.slice(0, 100) : undefined;
   const token = await mintDeviceToken(locals.user.id, label);
-  return json({ token });
+  // userId lets native bind the token to an account and re-mint on switch.
+  return json({ token, userId: locals.user.id });
 };

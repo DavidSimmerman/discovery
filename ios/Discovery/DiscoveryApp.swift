@@ -2,6 +2,8 @@ import SwiftUI
 
 @main
 struct DiscoveryApp: App {
+    @Environment(\.scenePhase) private var scenePhase
+
     init() {
         ArtworkCache.pruneOldFiles()
         Task { @MainActor in
@@ -22,6 +24,12 @@ struct DiscoveryApp: App {
                         WebViewContainer.navigate(to: "/now-playing")
                     }
                 }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                // Re-attempt a push-token registration that failed offline.
+                ActivityManager.shared.retryPendingRegistration()
+            }
         }
     }
 }

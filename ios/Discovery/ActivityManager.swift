@@ -51,10 +51,15 @@ final class ActivityManager {
     }
 
     func deviceTokenBecameAvailable() {
-        if let pending = pendingPushToken {
-            pendingPushToken = nil
-            Task { await registerPushToken(pending) }
-        }
+        retryPendingRegistration()
+    }
+
+    /// Called when a bearer token lands or the app returns to the foreground —
+    /// re-attempts a registration that failed offline or against a stale token.
+    func retryPendingRegistration() {
+        guard let pending = pendingPushToken else { return }
+        pendingPushToken = nil
+        Task { await registerPushToken(pending) }
     }
 
     // MARK: activity lifecycle
@@ -107,6 +112,9 @@ final class ActivityManager {
 
     // MARK: server registration
 
+    /// pushTokenUpdates won't re-emit a token this activity already has, so a
+    /// failed registration must be retried, not dropped — otherwise server
+    /// pushes never start for this activity.
     private func registerPushToken(_ token: String) async {
         guard let bearer = KeychainHelper.readToken() else {
             pendingPushToken = token
@@ -118,7 +126,28 @@ final class ActivityManager {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
         request.httpBody = try? JSONSerialization.data(withJSONObject: ["apnsPushToken": token])
-        _ = try? await URLSession.shared.data(for: request)
+
+        for attempt in 1...3 {
+            do {
+                let (_, response) = try await URLSession.shared.data(for: request)
+                let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+                if (200..<300).contains(status) { return }
+                if status == 401 {
+                    // Stale bearer — drop it; the sessionUser flow re-mints,
+                    // then deviceTokenBecameAvailable retries this token.
+                    KeychainHelper.deleteToken()
+                    pendingPushToken = token
+                    return
+                }
+            } catch {
+                // Offline / transient — fall through to backoff.
+            }
+            if attempt < 3 {
+                try? await Task.sleep(nanoseconds: UInt64(attempt) * 2_000_000_000)
+            }
+        }
+        // Still failing — park it for the next foreground/token event.
+        pendingPushToken = token
     }
 
     private func unregisterOnServer() async {

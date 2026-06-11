@@ -45,7 +45,11 @@ struct RateTrackIntent: LiveActivityIntent {
                 "spotifyTrackUri": trackUri,
                 "ratingStars": rating,
             ])
-            _ = try? await URLSession.shared.data(for: request)
+            if let (_, response) = try? await URLSession.shared.data(for: request),
+               (response as? HTTPURLResponse)?.statusCode == 401 {
+                // Revoked/stale token — drop it so the app re-mints on next open.
+                KeychainHelper.deleteToken()
+            }
         }
 
         return .result()

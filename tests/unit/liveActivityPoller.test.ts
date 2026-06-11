@@ -163,6 +163,28 @@ describe('tickOnce', () => {
     expect(deps.updates[0]).toMatchObject({ id: 'la-1', endedAt: NOW });
   });
 
+  it('keeps the row active when the end push fails transiently (retries next tick)', async () => {
+    const old = new Date(NOW.getTime() - STOPPED_END_MS - 1);
+    const deps = makeDeps({
+      listActiveActivities: async () => [row({ stoppedSince: old })],
+      fetchPlaying: async () => ({ playing: null, rating: null }),
+      push: async () => ({ ok: false as const, status: 503, reason: 'ServiceUnavailable' }),
+    });
+    await tickOnce(deps);
+    expect(deps.updates).toHaveLength(0); // no endedAt — row retried on next tick
+  });
+
+  it('closes the row on end when APNs is not configured (nothing to retry)', async () => {
+    const old = new Date(NOW.getTime() - STOPPED_END_MS - 1);
+    const deps = makeDeps({
+      listActiveActivities: async () => [row({ stoppedSince: old })],
+      fetchPlaying: async () => ({ playing: null, rating: null }),
+      push: async () => ({ ok: false as const, reason: 'apns-not-configured' }),
+    });
+    await tickOnce(deps);
+    expect(deps.updates[0]).toMatchObject({ id: 'la-1', endedAt: NOW });
+  });
+
   it('marks the row ended when APNs reports the push token gone', async () => {
     const deps = makeDeps({
       push: async () => ({ ok: false as const, status: 410, reason: 'Unregistered' }),

@@ -18,11 +18,14 @@ const TRACK = {
 declare global {
   interface Window {
     webkit?: { messageHandlers?: { discovery?: { postMessage: (msg: unknown) => void } } };
-    __discoveryNative?: { requestDeviceToken: (label?: string) => Promise<void> };
+    __discoveryNative?: {
+      requestDeviceToken: (label?: string) => Promise<void>;
+      reportSession: () => Promise<void>;
+    };
   }
 }
 
-let postMessage: ReturnType<typeof vi.fn>;
+let postMessage: ReturnType<typeof vi.fn<(msg: unknown) => void>>;
 
 beforeEach(() => {
   __resetNativeBridge();
@@ -96,9 +99,9 @@ describe('notifyRatingChanged', () => {
 });
 
 describe('installNativeHandlers → requestDeviceToken', () => {
-  it('mints a token over the cookie session and hands it to native', async () => {
+  it('mints a token over the cookie session and hands it to native with its owner', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ token: 'minted-tok' }), { status: 200 }),
+      new Response(JSON.stringify({ token: 'minted-tok', userId: 'user-1' }), { status: 200 }),
     );
     installNativeHandlers();
     await window.__discoveryNative!.requestDeviceToken('iPhone');
@@ -106,7 +109,11 @@ describe('installNativeHandlers → requestDeviceToken', () => {
       '/api/ios/device-token',
       expect.objectContaining({ method: 'POST' }),
     );
-    expect(postMessage).toHaveBeenCalledWith({ type: 'deviceToken', token: 'minted-tok' });
+    expect(postMessage).toHaveBeenCalledWith({
+      type: 'deviceToken',
+      token: 'minted-tok',
+      userId: 'user-1',
+    });
   });
 
   it('reports failure to native instead of throwing', async () => {
@@ -123,5 +130,23 @@ describe('installNativeHandlers → requestDeviceToken', () => {
     delete window.webkit;
     installNativeHandlers();
     expect(window.__discoveryNative).toBeUndefined();
+  });
+});
+
+describe('installNativeHandlers → reportSession', () => {
+  it('posts the current session user so native can detect account switches', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ userId: 'user-1' }), { status: 200 }),
+    );
+    installNativeHandlers();
+    await window.__discoveryNative!.reportSession();
+    expect(postMessage).toHaveBeenCalledWith({ type: 'sessionUser', userId: 'user-1' });
+  });
+
+  it('posts null when logged out or the check fails', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('no', { status: 401 }));
+    installNativeHandlers();
+    await window.__discoveryNative!.reportSession();
+    expect(postMessage).toHaveBeenCalledWith({ type: 'sessionUser', userId: null });
   });
 });

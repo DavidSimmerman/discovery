@@ -36,6 +36,11 @@ struct WebViewContainer: UIViewRepresentable {
     func updateUIView(_ webView: WKWebView, context: Context) {}
 
     final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
+        /// UserDefaults key recording which account the Keychain token belongs
+        /// to — lets us discard the token after a logout/account switch instead
+        /// of writing ratings to the wrong user.
+        private static let boundUserKey = "deviceTokenUserId"
+
         func userContentController(
             _ userContentController: WKUserContentController,
             didReceive message: WKScriptMessage
@@ -44,6 +49,7 @@ struct WebViewContainer: UIViewRepresentable {
                   let body = message.body as? [String: Any],
                   let type = body["type"] as? String
             else { return }
+            let webView = message.webView
 
             Task { @MainActor in
                 switch type {
@@ -60,9 +66,14 @@ struct WebViewContainer: UIViewRepresentable {
                     // Deliberate no-op: the server ends the activity after the
                     // stop window so a brief pause doesn't kill the lock screen.
                     break
+                case "sessionUser":
+                    self.handleSessionUser(body["userId"] as? String, webView: webView)
                 case "deviceToken":
                     if let token = body["token"] as? String {
                         KeychainHelper.saveToken(token)
+                        if let userId = body["userId"] as? String {
+                            UserDefaults.standard.set(userId, forKey: Self.boundUserKey)
+                        }
                         ActivityManager.shared.deviceTokenBecameAvailable()
                     }
                 case "deviceTokenError":
@@ -75,22 +86,37 @@ struct WebViewContainer: UIViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            requestDeviceTokenIfNeeded(webView, attempt: 0)
+            reportSessionWithRetry(webView, attempt: 0)
         }
 
-        /// Bootstrap the bearer token. The web app installs
+        /// Ask the web layer who's logged in. It installs
         /// window.__discoveryNative asynchronously after hydration, so retry
         /// a few times before giving up until the next navigation.
-        private func requestDeviceTokenIfNeeded(_ webView: WKWebView, attempt: Int) {
-            guard KeychainHelper.readToken() == nil, attempt < 5 else { return }
-            let js = "window.__discoveryNative ? (window.__discoveryNative.requestDeviceToken('iOS wrapper'), true) : false"
+        private func reportSessionWithRetry(_ webView: WKWebView, attempt: Int) {
+            guard attempt < 5 else { return }
+            let js = "window.__discoveryNative ? (window.__discoveryNative.reportSession(), true) : false"
             webView.evaluateJavaScript(js) { [weak webView] result, _ in
                 guard (result as? Bool) != true else { return }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                     guard let webView else { return }
-                    self.requestDeviceTokenIfNeeded(webView, attempt: attempt + 1)
+                    self.reportSessionWithRetry(webView, attempt: attempt + 1)
                 }
             }
+        }
+
+        /// Mint when we have no token; discard + re-mint when the session
+        /// belongs to a different account than the token does.
+        private func handleSessionUser(_ userId: String?, webView: WKWebView?) {
+            guard let userId else { return } // logged out — nothing to mint
+            let bound = UserDefaults.standard.string(forKey: Self.boundUserKey)
+            let hasToken = KeychainHelper.readToken() != nil
+            if hasToken && bound == userId { return }
+            if hasToken && bound != userId {
+                KeychainHelper.deleteToken()
+                UserDefaults.standard.removeObject(forKey: Self.boundUserKey)
+            }
+            webView?.evaluateJavaScript(
+                "window.__discoveryNative && window.__discoveryNative.requestDeviceToken('iOS wrapper')")
         }
     }
 }

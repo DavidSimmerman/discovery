@@ -35,10 +35,11 @@ describe('POST /api/ios/device-token', () => {
     expect(h.mintDeviceToken).not.toHaveBeenCalled();
   });
 
-  it('mints and returns the plaintext token once for cookie-authed users', async () => {
+  it('mints and returns the plaintext token + owning userId for cookie-authed users', async () => {
     const res = await POST(event({ user: { id: 'user-1' }, body: { label: 'iPhone 17' } }));
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ token: 'minted-token-value' });
+    // userId lets native bind the token to an account and detect switches.
+    expect(await res.json()).toEqual({ token: 'minted-token-value', userId: 'user-1' });
     expect(h.mintDeviceToken).toHaveBeenCalledWith('user-1', 'iPhone 17');
   });
 

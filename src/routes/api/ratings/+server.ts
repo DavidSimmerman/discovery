@@ -74,8 +74,20 @@ export const PUT: RequestHandler = async ({ locals, request }) => {
   // best-effort, never blocks or fails the rating). Downgrades don't remove.
   if (ratingStars >= 2) void ensureSavedTrack(locals.user.id, spotifyTrackUri);
 
+  nudgeLiveActivity(locals.user.id);
+
   return json({ ok: true, ratingStars });
 };
+
+// Refresh the user's iOS Live Activity (if any) so a rating set in the web UI
+// shows on the lock screen immediately. Dynamic import keeps the poller's
+// Spotify/APNs dependency graph out of this route's unit tests; best-effort,
+// never blocks or fails the response.
+function nudgeLiveActivity(userId: string) {
+  void import('$lib/server/liveActivityPoller')
+    .then(({ nudgeUserActivities }) => nudgeUserActivities(userId))
+    .catch(() => {});
+}
 
 export const DELETE: RequestHandler = async ({ locals, request }) => {
   if (!locals.user) throw error(401, 'not logged in');
@@ -94,6 +106,8 @@ export const DELETE: RequestHandler = async ({ locals, request }) => {
   await db
     .delete(ratings)
     .where(and(eq(ratings.userId, locals.user.id), eq(ratings.spotifyTrackUri, targetUri)));
+
+  nudgeLiveActivity(locals.user.id);
 
   return json({ ok: true });
 };

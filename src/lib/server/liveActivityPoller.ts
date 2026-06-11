@@ -116,47 +116,69 @@ function isDeadToken(res: ApnsPushResult): boolean {
   return !res.ok && (res.status === 410 || DEAD_TOKEN_REASONS.test(res.reason));
 }
 
+async function processRow(row: ActivityRow, deps: PollerDeps): Promise<void> {
+  const accessToken = await deps.getAccessToken(row.userId);
+  const { playing, rating } = await deps.fetchPlaying(row.userId, accessToken);
+  const current = computeContentState(playing, rating);
+  const decision = decidePollAction(row, current, deps.now());
+
+  if (decision.end) {
+    await deps.push(row.apnsPushToken, current, { event: 'end' });
+    await deps.updateRow(row.id, { endedAt: deps.now() });
+    return;
+  }
+
+  if (decision.push) {
+    const res = await deps.push(row.apnsPushToken, decision.push.state, { event: 'update' });
+    if (isDeadToken(res)) {
+      await deps.updateRow(row.id, { endedAt: deps.now() });
+      return;
+    }
+    if (res.ok) {
+      await deps.updateRow(row.id, {
+        contentStateHash: decision.push.hash,
+        lastTrackUri: decision.push.state.trackUri,
+        stoppedSince: decision.stoppedSince,
+      });
+    }
+    return;
+  }
+
+  // Nothing pushed — persist stop-clock transitions only.
+  const prev = row.stoppedSince?.getTime() ?? null;
+  const next = decision.stoppedSince?.getTime() ?? null;
+  if (prev !== next) {
+    await deps.updateRow(row.id, { stoppedSince: decision.stoppedSince });
+  }
+}
+
 export async function tickOnce(deps: PollerDeps): Promise<void> {
   const rows = await deps.listActiveActivities();
   for (const row of rows) {
     try {
-      const accessToken = await deps.getAccessToken(row.userId);
-      const { playing, rating } = await deps.fetchPlaying(row.userId, accessToken);
-      const current = computeContentState(playing, rating);
-      const decision = decidePollAction(row, current, deps.now());
-
-      if (decision.end) {
-        await deps.push(row.apnsPushToken, current, { event: 'end' });
-        await deps.updateRow(row.id, { endedAt: deps.now() });
-        continue;
-      }
-
-      if (decision.push) {
-        const res = await deps.push(row.apnsPushToken, decision.push.state, { event: 'update' });
-        if (isDeadToken(res)) {
-          await deps.updateRow(row.id, { endedAt: deps.now() });
-          continue;
-        }
-        if (res.ok) {
-          await deps.updateRow(row.id, {
-            contentStateHash: decision.push.hash,
-            lastTrackUri: decision.push.state.trackUri,
-            stoppedSince: decision.stoppedSince,
-          });
-        }
-        continue;
-      }
-
-      // Nothing pushed — persist stop-clock transitions only.
-      const prev = row.stoppedSince?.getTime() ?? null;
-      const next = decision.stoppedSince?.getTime() ?? null;
-      if (prev !== next) {
-        await deps.updateRow(row.id, { stoppedSince: decision.stoppedSince });
-      }
+      await processRow(row, deps);
     } catch (err) {
       // One user's failure (expired refresh token, Spotify 5xx) must not
       // stall everyone else's lock screen.
       console.error(`[live-activity] poll failed for user ${row.userId}`, err);
+    }
+  }
+}
+
+/**
+ * Re-evaluate one user's activity right now — called after a rating write so
+ * the lock screen updates without waiting for the next poll tick.
+ */
+export async function nudgeUserActivities(
+  userId: string,
+  deps: PollerDeps = realDeps,
+): Promise<void> {
+  const rows = (await deps.listActiveActivities()).filter((r) => r.userId === userId);
+  for (const row of rows) {
+    try {
+      await processRow(row, deps);
+    } catch (err) {
+      console.error(`[live-activity] nudge failed for user ${userId}`, err);
     }
   }
 }

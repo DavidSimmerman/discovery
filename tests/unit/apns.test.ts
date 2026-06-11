@@ -116,6 +116,12 @@ describe('buildLiveActivityPayload', () => {
     expect(body.aps.event).toBe('end');
   });
 
+  it('omits content-state when null (end without final state)', () => {
+    const body = JSON.parse(buildLiveActivityPayload(null, { event: 'end', timestamp: 1 }));
+    expect(body.aps).not.toHaveProperty('content-state');
+    expect(body.aps.event).toBe('end');
+  });
+
   it('rejects payloads over 4KB', () => {
     expect(() =>
       buildLiveActivityPayload({ blob: 'x'.repeat(5000) }, { event: 'update', timestamp: 1 }),

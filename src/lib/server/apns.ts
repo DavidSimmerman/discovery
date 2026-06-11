@@ -90,14 +90,16 @@ export interface LiveActivityPushOptions {
 }
 
 export function buildLiveActivityPayload(
-  contentState: Record<string, unknown>,
+  contentState: Record<string, unknown> | null,
   opts: LiveActivityPushOptions,
 ): string {
   const aps: Record<string, unknown> = {
     timestamp: opts.timestamp ?? Math.floor(Date.now() / 1000),
     event: opts.event,
-    'content-state': contentState,
   };
+  // `content-state` is required for updates but optional on end events — an
+  // end push after Spotify reports nothing playing has no state to send.
+  if (contentState !== null) aps['content-state'] = contentState;
   if (opts.event === 'end' && opts.dismissalDate !== undefined) {
     aps['dismissal-date'] = opts.dismissalDate;
   }
@@ -111,7 +113,7 @@ export function buildLiveActivityPayload(
 /** Push a content-state update (or end event) to one Live Activity. */
 export async function pushActivityUpdate(
   pushToken: string,
-  contentState: Record<string, unknown>,
+  contentState: Record<string, unknown> | null,
   opts: LiveActivityPushOptions,
 ): Promise<ApnsPushResult> {
   const cfg = readApnsConfig();

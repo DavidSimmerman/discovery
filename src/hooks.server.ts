@@ -1,9 +1,18 @@
-import type { Handle } from '@sveltejs/kit';
+import type { Handle, ServerInit } from '@sveltejs/kit';
+import { building } from '$app/environment';
 import { readSessionCookie } from '$lib/server/session';
 import { resolveDeviceToken } from '$lib/server/deviceTokens';
 import { db } from '$lib/server/db';
 import { users } from '$lib/server/db/schema';
 import { eq } from 'drizzle-orm';
+
+// Drives iOS Live Activity pushes while any are registered. Dynamic import
+// keeps the poller (and its Spotify/APNs imports) out of unit-test graphs.
+export const init: ServerInit = async () => {
+  if (building) return;
+  const { startLiveActivityPoller } = await import('$lib/server/liveActivityPoller');
+  startLiveActivityPoller();
+};
 
 // Auth resolution order: session cookie (web), then `Authorization: Bearer`
 // device token (iOS wrapper / widget). Cookie wins when both are present.

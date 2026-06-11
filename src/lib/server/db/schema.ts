@@ -397,5 +397,50 @@ export const artistTopTracks = pgTable(
   (table) => [primaryKey({ columns: [table.artistKey, table.rank] })],
 );
 
+// Opaque API tokens minted for the iOS wrapper (and any future native shell).
+// The plaintext token is returned exactly once at mint time and never stored —
+// only its SHA-256 hex lands here. Resolved by hooks.server.ts when a request
+// carries `Authorization: Bearer <token>` instead of the session cookie.
+export const deviceTokens = pgTable('device_tokens', {
+  id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
+  userId: uuid('user_id')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  tokenHash: text('token_hash').notNull().unique(),
+  label: text('label'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
+});
+
+// One row per Live Activity the iOS app has started. The server-side poller
+// walks rows where `ended_at` is null, pushes APNs content-state updates on
+// change, and ends the activity after playback has been stopped ~10 min.
+// `content_state_hash` dedupes pushes; `stopped_since` tracks the first poll
+// that saw nothing playing (cleared when playback resumes).
+export const liveActivities = pgTable(
+  'live_activities',
+  {
+    id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    apnsPushToken: text('apns_push_token').notNull(),
+    deviceTokenId: uuid('device_token_id').references(() => deviceTokens.id, {
+      onDelete: 'set null',
+    }),
+    contentStateHash: text('content_state_hash'),
+    lastTrackUri: text('last_track_uri'),
+    stoppedSince: timestamp('stopped_since', { withTimezone: true }),
+    startedAt: timestamp('started_at', { withTimezone: true }).defaultNow().notNull(),
+    endedAt: timestamp('ended_at', { withTimezone: true }),
+  },
+  (table) => [
+    // At most one ACTIVE activity per user; ended rows are kept for debugging.
+    uniqueIndex('live_activities_active_user_idx')
+      .on(table.userId)
+      .where(sql`${table.endedAt} is null`),
+  ],
+);
+
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;

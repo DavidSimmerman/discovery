@@ -11,6 +11,12 @@
 import { getContext, setContext } from 'svelte';
 import { browser } from '$app/environment';
 import { buildQueueFromClick, shuffleFisherYates } from './queue';
+import {
+  installNativeHandlers,
+  notifyPlayback,
+  notifyRatingChanged,
+  notifyStopped,
+} from './nativeBridge';
 import type { Timeline } from '$lib/server/shuffle/timeline';
 
 const KEY = Symbol('playback');
@@ -212,6 +218,7 @@ export function createPlaybackStore(): PlaybackStore {
           // Zeroes for position/duration — predicates short-circuit on the null
           // currentUri before the time math matters.
           maybeAdvanceSampler(null, 0, 0);
+          notifyStopped(); // iOS wrapper: confirmed drain, native may wind down
         }
         return;
       }
@@ -251,6 +258,17 @@ export function createPlaybackStore(): PlaybackStore {
         }
       }
       err = null;
+      // iOS wrapper: keep the Live Activity in sync (deduped inside the bridge).
+      notifyPlayback(
+        {
+          uri: p.uri,
+          name: p.name,
+          artists: p.artists.join(', '),
+          albumArtUrl: p.albumArtUrl,
+        },
+        ratingByUri.get(p.uri) ?? null,
+        p.isPlaying,
+      );
       maybeAdvanceSampler(p.uri, p.progressMs ?? 0, p.durationMs);
     } catch {
       /* network blip — keep last known state */
@@ -279,6 +297,7 @@ export function createPlaybackStore(): PlaybackStore {
   function init(): void {
     if (isReady) return;
     isReady = true;
+    if (browser) installNativeHandlers(); // no-op outside the iOS wrapper
     // Refresh first so tryResumeSampler can compare Spotify's current URI to
     // the timeline. Fire-and-forget so init stays sync.
     void refresh().then(() => tryResumeSampler());
@@ -759,6 +778,7 @@ export function createPlaybackStore(): PlaybackStore {
   function setCurrentRating(uri: string, ratingStars: number | null): void {
     ratingByUri.set(uri, ratingStars);
     ratingTrigger++;
+    notifyRatingChanged(uri, ratingStars); // iOS wrapper: instant star refresh
   }
 
   return {

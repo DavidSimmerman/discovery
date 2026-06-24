@@ -124,6 +124,11 @@ async function processRow(row: ActivityRow, deps: PollerDeps): Promise<void> {
 
   if (decision.end) {
     const res = await deps.push(row.apnsPushToken, current, { event: 'end' });
+    if (!res.ok && res.reason !== 'apns-not-configured') {
+      console.warn(
+        `[live-activity] end push failed user=${row.userId} status=${res.status ?? '-'} reason=${res.reason}`,
+      );
+    }
     // Close the row when the end was delivered, the token is dead anyway, or
     // APNs isn't configured (nothing will ever deliver). A transient failure
     // (5xx, network) leaves the row active so the next tick retries the end.
@@ -136,6 +141,13 @@ async function processRow(row: ActivityRow, deps: PollerDeps): Promise<void> {
 
   if (decision.push) {
     const res = await deps.push(row.apnsPushToken, decision.push.state, { event: 'update' });
+    if (res.ok) {
+      console.log(`[live-activity] pushed update user=${row.userId} uri=${decision.push.state.trackUri}`);
+    } else {
+      console.warn(
+        `[live-activity] update push failed user=${row.userId} status=${res.status ?? '-'} reason=${res.reason}`,
+      );
+    }
     if (isDeadToken(res)) {
       await deps.updateRow(row.id, { endedAt: deps.now() });
       return;

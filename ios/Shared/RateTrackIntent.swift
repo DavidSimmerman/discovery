@@ -1,6 +1,9 @@
 import ActivityKit
 import AppIntents
 import Foundation
+import os
+
+private let log = Logger(subsystem: "tech.simmerman.discovery", category: "LiveActivity")
 
 /// Tapping a star on the Live Activity. `LiveActivityIntent` guarantees
 /// `perform()` runs in the MAIN APP process (never the extension), so it can
@@ -26,12 +29,16 @@ struct RateTrackIntent: LiveActivityIntent {
 
     func perform() async throws -> some IntentResult {
         // 1. Instant lock-screen feedback — no server round-trip.
-        for activity in Activity<NowPlayingAttributes>.activities {
+        let activities = Activity<NowPlayingAttributes>.activities
+        var matched = false
+        for activity in activities {
+            guard activity.content.state.trackUri == trackUri else { continue }
+            matched = true
             var state = activity.content.state
-            guard state.trackUri == trackUri else { continue }
             state.rating = rating
             await activity.update(ActivityContent(state: state, staleDate: nil))
         }
+        log.info("RateTrackIntent rating=\(rating) uri=\(trackUri, privacy: .public) activities=\(activities.count) matched=\(matched)")
 
         // 2. Persist through the same API the web UI uses. Best-effort: the
         // server's poller re-pushes truth within seconds either way.

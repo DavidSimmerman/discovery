@@ -2,6 +2,9 @@ import ActivityKit
 import SwiftUI
 import WidgetKit
 
+/// Discovery brand green — matches `--color-spotify-green` / Star.svelte (#1DB954).
+private let discoveryGreen = Color(red: 0x1D / 255.0, green: 0xB9 / 255.0, blue: 0x54 / 255.0)
+
 struct NowPlayingLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: NowPlayingAttributes.self) { context in
@@ -27,8 +30,9 @@ struct NowPlayingLiveActivity: Widget {
                     }
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    StarRow(state: context.state, starSize: 28)
-                        .padding(.top, 4)
+                    StarRow(state: context.state, starSize: 34)
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 6)
                 }
             } compactLeading: {
                 ArtworkView(artworkUrl: context.state.artworkUrl, size: 22)
@@ -40,7 +44,7 @@ struct NowPlayingLiveActivity: Widget {
                         Image(systemName: "star.fill")
                             .font(.system(size: 9))
                     }
-                    .foregroundStyle(.yellow)
+                    .foregroundStyle(discoveryGreen)
                 } else {
                     Image(systemName: "star")
                         .font(.system(size: 11))
@@ -49,42 +53,32 @@ struct NowPlayingLiveActivity: Widget {
             } minimal: {
                 Image(systemName: context.state.rating != nil ? "star.fill" : "star")
                     .font(.system(size: 11))
-                    .foregroundStyle(.yellow)
+                    .foregroundStyle(discoveryGreen)
             }
             .widgetURL(URL(string: "discovery://now-playing"))
         }
     }
 }
 
+/// Lock screen: artwork for context + big tappable green stars as the hero.
+/// Title/artist are intentionally omitted — Spotify's own media Live Activity
+/// already shows them directly above this one.
 private struct LockScreenView: View {
     let state: NowPlayingAttributes.ContentState
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 14) {
             ArtworkView(artworkUrl: state.artworkUrl, size: 56)
-            VStack(alignment: .leading, spacing: 6) {
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text(state.title)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.white)
-                            .lineLimit(1)
-                        if !state.isPlaying {
-                            Image(systemName: "pause.fill")
-                                .font(.system(size: 10))
-                                .foregroundStyle(.white.opacity(0.5))
-                        }
-                    }
-                    Text(state.artists)
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.6))
-                        .lineLimit(1)
-                }
-                StarRow(state: state, starSize: 24)
+            StarRow(state: state, starSize: 40)
+                .frame(maxWidth: .infinity)
+            if !state.isPlaying {
+                Image(systemName: "pause.fill")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white.opacity(0.5))
             }
-            Spacer(minLength: 0)
         }
-        .padding(14)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 16)
     }
 }
 
@@ -95,12 +89,12 @@ private struct StarRow: View {
     let starSize: CGFloat
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: starSize * 0.28) {
             ForEach(1...5, id: \.self) { star in
                 Button(intent: RateTrackIntent(rating: star, trackUri: state.trackUri ?? "")) {
                     Image(systemName: star <= (state.rating ?? 0) ? "star.fill" : "star")
-                        .font(.system(size: starSize * 0.8))
-                        .foregroundStyle(star <= (state.rating ?? 0) ? .yellow : .white.opacity(0.4))
+                        .font(.system(size: starSize * 0.82))
+                        .foregroundStyle(star <= (state.rating ?? 0) ? discoveryGreen : Color.white.opacity(0.28))
                         .frame(width: starSize, height: starSize)
                 }
                 .buttonStyle(.plain)

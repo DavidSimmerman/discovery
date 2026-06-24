@@ -1,5 +1,8 @@
 import ActivityKit
 import Foundation
+import os
+
+private let log = Logger(subsystem: "tech.simmerman.discovery", category: "LiveActivity")
 
 /// Owns the Live Activity lifecycle on the app side: starts it on the first
 /// trackChanged bridge message, applies local updates for instant feedback,
@@ -23,7 +26,11 @@ final class ActivityManager {
         guard let uri = track["uri"] as? String,
               let title = track["name"] as? String,
               let artists = track["artists"] as? String
-        else { return }
+        else {
+            log.error("trackChanged ignored — missing uri/name/artists in bridge payload")
+            return
+        }
+        log.info("trackChanged: \(title, privacy: .public) rating=\(rating ?? -1) playing=\(isPlaying)")
         let artworkUrl = track["albumArtUrl"] as? String
         let state = NowPlayingAttributes.ContentState(
             trackUri: uri,
@@ -33,13 +40,20 @@ final class ActivityManager {
             rating: rating,
             isPlaying: isPlaying)
 
-        // Pre-cache artwork so the widget can render it from the App Group.
-        Task { await ArtworkCache.ensureCached(artworkUrl: artworkUrl) }
-
         if let activity {
             Task { await activity.update(ActivityContent(state: state, staleDate: nil)) }
         } else {
             start(with: state)
+        }
+
+        // The widget extension can't fetch over the network, so artwork must be
+        // cached into the App Group first. The activity above starts instantly
+        // (gray placeholder); once the file lands, re-emit the same state so the
+        // widget re-reads it and the artwork pops in.
+        Task {
+            guard await ArtworkCache.ensureCached(artworkUrl: artworkUrl) else { return }
+            guard let activity = self.activity, activity.content.state.trackUri == uri else { return }
+            await activity.update(ActivityContent(state: activity.content.state, staleDate: nil))
         }
     }
 
@@ -75,7 +89,10 @@ final class ActivityManager {
     }
 
     private func start(with state: NowPlayingAttributes.ContentState) {
-        guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+            log.error("Live Activity not started — disabled in iOS Settings (Settings ▸ discovery ▸ Live Activities)")
+            return
+        }
         do {
             let started = try Activity.request(
                 attributes: NowPlayingAttributes(startedAt: .now),
@@ -84,8 +101,10 @@ final class ActivityManager {
             activity = started
             observePushToken(of: started)
             observeStateTransitions(of: started)
+            log.info("Live Activity started: \(started.id, privacy: .public)")
         } catch {
             // Activities disabled / 8h budget hit — web playback is unaffected.
+            log.error("Activity.request failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 

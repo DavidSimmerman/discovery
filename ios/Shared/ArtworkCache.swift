@@ -23,20 +23,26 @@ enum ArtworkCache {
     }
 
     /// Download-if-missing. Called by the app on every track change.
-    static func ensureCached(artworkUrl urlString: String?) async {
+    /// Returns true only when it *newly* wrote the file, so the caller can
+    /// nudge the Live Activity to re-read it (a pre-existing file already
+    /// rendered, and failures fall back to the placeholder).
+    @discardableResult
+    static func ensureCached(artworkUrl urlString: String?) async -> Bool {
         guard let urlString, let remote = URL(string: urlString),
               let dir = directory,
               let target = fileURL(forArtworkUrl: urlString)
-        else { return }
+        else { return false }
         let fm = FileManager.default
-        if fm.fileExists(atPath: target.path) { return }
+        if fm.fileExists(atPath: target.path) { return false }
         do {
             try fm.createDirectory(at: dir, withIntermediateDirectories: true)
             let (data, response) = try await URLSession.shared.data(from: remote)
-            guard (response as? HTTPURLResponse)?.statusCode == 200 else { return }
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else { return false }
             try data.write(to: target, options: .atomic)
+            return true
         } catch {
             // Artwork is cosmetic — the widget falls back to a placeholder.
+            return false
         }
     }
 

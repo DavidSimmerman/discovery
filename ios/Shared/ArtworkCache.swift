@@ -1,5 +1,8 @@
 import CryptoKit
 import Foundation
+import os
+
+private let log = Logger(subsystem: "tech.simmerman.discovery", category: "LiveActivity")
 
 /// Album-art file cache in the App Group container. APNs payloads can't carry
 /// images and widget extensions can't fetch over the network, so the APP
@@ -28,20 +31,26 @@ enum ArtworkCache {
     /// rendered, and failures fall back to the placeholder).
     @discardableResult
     static func ensureCached(artworkUrl urlString: String?) async -> Bool {
-        guard let urlString, let remote = URL(string: urlString),
-              let dir = directory,
-              let target = fileURL(forArtworkUrl: urlString)
-        else { return false }
+        guard let urlString, let remote = URL(string: urlString) else { return false }
+        guard let dir = directory, let target = fileURL(forArtworkUrl: urlString) else {
+            log.error("ArtworkCache: App Group container unavailable — enable the App Groups capability (group.tech.simmerman.discovery) on BOTH targets in the provisioning profile")
+            return false
+        }
         let fm = FileManager.default
-        if fm.fileExists(atPath: target.path) { return false }
+        if fm.fileExists(atPath: target.path) { return true }
         do {
             try fm.createDirectory(at: dir, withIntermediateDirectories: true)
-            let (data, response) = try await URLSession.shared.data(from: remote)
-            guard (response as? HTTPURLResponse)?.statusCode == 200 else { return false }
+            // Bounded so a stalled download can't block the activity from rendering.
+            let (data, response) = try await URLSession.shared.data(
+                for: URLRequest(url: remote, timeoutInterval: 8))
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+                log.error("ArtworkCache: fetch non-200 for \(remote, privacy: .public)")
+                return false
+            }
             try data.write(to: target, options: .atomic)
             return true
         } catch {
-            // Artwork is cosmetic — the widget falls back to a placeholder.
+            log.error("ArtworkCache: fetch failed — \(error.localizedDescription, privacy: .public)")
             return false
         }
     }

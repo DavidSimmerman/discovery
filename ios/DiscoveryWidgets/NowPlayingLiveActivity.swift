@@ -95,6 +95,7 @@ private struct StarRow: View {
                     Image(systemName: star <= (state.rating ?? 0) ? "star.fill" : "star")
                         .font(.system(size: starSize * 0.82))
                         .foregroundStyle(star <= (state.rating ?? 0) ? discoveryGreen : Color.white.opacity(0.28))
+                        .contentTransition(.identity) // no cross-fade — flip instantly
                         .frame(width: starSize, height: starSize)
                 }
                 .buttonStyle(.plain)

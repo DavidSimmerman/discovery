@@ -40,20 +40,17 @@ final class ActivityManager {
             rating: rating,
             isPlaying: isPlaying)
 
-        if let activity {
-            Task { await activity.update(ActivityContent(state: state, staleDate: nil)) }
-        } else {
-            start(with: state)
-        }
-
-        // The widget extension can't fetch over the network, so artwork must be
-        // cached into the App Group first. The activity above starts instantly
-        // (gray placeholder); once the file lands, re-emit the same state so the
-        // widget re-reads it and the artwork pops in.
+        // Cache artwork BEFORE the activity renders — the widget extension can't
+        // fetch over the network, so the file must already be in the App Group
+        // when it first draws, or it shows the gray placeholder. ensureCached is
+        // bounded (8s) and a no-op once the file exists, so this is cheap.
         Task {
-            guard await ArtworkCache.ensureCached(artworkUrl: artworkUrl) else { return }
-            guard let activity = self.activity, activity.content.state.trackUri == uri else { return }
-            await activity.update(ActivityContent(state: activity.content.state, staleDate: nil))
+            await ArtworkCache.ensureCached(artworkUrl: artworkUrl)
+            if let activity = self.activity {
+                await activity.update(ActivityContent(state: state, staleDate: nil))
+            } else {
+                self.start(with: state)
+            }
         }
     }
 

@@ -53,7 +53,6 @@ private struct LockScreenView: View {
     var body: some View {
         VStack(spacing: 10) {
             HStack(spacing: 4) {
-                Spacer(minLength: 0)
                 if !state.isPlaying {
                     Image(systemName: "pause.fill")
                         .font(.system(size: 9))
@@ -64,6 +63,7 @@ private struct LockScreenView: View {
                     .foregroundStyle(.white.opacity(0.5))
                     .lineLimit(1)
                     .truncationMode(.tail)
+                Spacer(minLength: 0)
             }
             StarRow(state: state, starSize: 44)
         }

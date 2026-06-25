@@ -1,6 +1,9 @@
 import ActivityKit
 import SwiftUI
 import WidgetKit
+import os
+
+private let log = Logger(subsystem: "tech.simmerman.discovery", category: "LiveActivity")
 
 /// Discovery brand green — matches `--color-spotify-green` / Star.svelte (#1DB954).
 private let discoveryGreen = Color(red: 0x1D / 255.0, green: 0xB9 / 255.0, blue: 0x54 / 255.0)
@@ -112,9 +115,7 @@ private struct ArtworkView: View {
 
     var body: some View {
         Group {
-            if let artworkUrl,
-               let fileURL = ArtworkCache.fileURL(forArtworkUrl: artworkUrl),
-               let uiImage = UIImage(contentsOfFile: fileURL.path) {
+            if let uiImage = loadArtwork() {
                 Image(uiImage: uiImage)
                     .resizable()
                     .scaledToFill()
@@ -130,5 +131,24 @@ private struct ArtworkView: View {
         }
         .frame(width: size, height: size)
         .clipShape(RoundedRectangle(cornerRadius: size * 0.18))
+    }
+
+    /// Loads the cached art and logs the exact reason on miss, so a persistent
+    /// gray square is diagnosable from the widget side.
+    private func loadArtwork() -> UIImage? {
+        guard let artworkUrl else { return nil } // no art for this track — fine
+        guard let fileURL = ArtworkCache.fileURL(forArtworkUrl: artworkUrl) else {
+            log.error("ArtworkView: App Group container unavailable — capability/provisioning missing on the widget target")
+            return nil
+        }
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            log.error("ArtworkView: not cached (app didn't download it — e.g. a background track change)")
+            return nil
+        }
+        guard let uiImage = UIImage(contentsOfFile: fileURL.path) else {
+            log.error("ArtworkView: file present but unreadable — likely data protection while the screen is locked")
+            return nil
+        }
+        return uiImage
     }
 }

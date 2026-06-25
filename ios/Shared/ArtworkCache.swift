@@ -47,7 +47,11 @@ enum ArtworkCache {
                 log.error("ArtworkCache: fetch non-200 for \(remote, privacy: .public)")
                 return false
             }
-            try data.write(to: target, options: .atomic)
+            // The Live Activity renders on the LOCKED lock screen; a file with the
+            // default "complete" protection is unreadable there, so the widget
+            // would show the gray placeholder. Album art is public/non-sensitive,
+            // so relax protection enough for the locked widget to read it.
+            try data.write(to: target, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
             return true
         } catch {
             log.error("ArtworkCache: fetch failed — \(error.localizedDescription, privacy: .public)")

@@ -17,7 +17,7 @@ struct NowPlayingLiveActivity: Widget {
             DynamicIsland {
                 DynamicIslandExpandedRegion(.center) {
                     VStack(spacing: 8) {
-                        Text("\(context.state.title) - \(context.state.artists)")
+                        (Text(context.state.title).fontWeight(.semibold) + Text("  \(context.state.artists)"))
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
@@ -58,7 +58,7 @@ private struct LockScreenView: View {
                         .font(.system(size: 9))
                         .foregroundStyle(.white.opacity(0.4))
                 }
-                Text("\(state.title) - \(state.artists)")
+                (Text(state.title).fontWeight(.semibold) + Text("  \(state.artists)"))
                     .font(.caption2)
                     .foregroundStyle(.white.opacity(0.5))
                     .lineLimit(1)

@@ -37,7 +37,14 @@ enum ArtworkCache {
             return false
         }
         let fm = FileManager.default
-        if fm.fileExists(atPath: target.path) { return true }
+        if fm.fileExists(atPath: target.path) {
+            // Re-apply relaxed protection: anything cached before this shipped
+            // still has the strict default and stays gray on the locked screen.
+            try? fm.setAttributes(
+                [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+                ofItemAtPath: target.path)
+            return true
+        }
         do {
             try fm.createDirectory(at: dir, withIntermediateDirectories: true)
             // Bounded so a stalled download can't block the activity from rendering.

@@ -17,9 +17,17 @@ struct NowPlayingLiveActivity: Widget {
             DynamicIsland {
                 DynamicIslandExpandedRegion(.center) {
                     VStack(spacing: 8) {
-                        (Text(context.state.title).font(.system(size: 13, weight: .semibold)) + Text("  \(context.state.artists)").font(.caption2))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                        VStack(spacing: 1) {
+                            Text(context.state.title)
+                                .font(.system(size: 13, weight: .semibold))
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                            Text(context.state.artists)
+                                .font(.caption2)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
+                        .foregroundStyle(.secondary)
                         StarRow(state: context.state, starSize: 32)
                     }
                     .padding(.top, 4)
@@ -51,16 +59,24 @@ private struct LockScreenView: View {
 
     var body: some View {
         VStack(spacing: 10) {
-            HStack(spacing: 4) {
-                if !state.isPlaying {
-                    Image(systemName: "pause.fill")
-                        .font(.system(size: 9))
-                        .foregroundStyle(.white.opacity(0.4))
+            HStack(spacing: 0) {
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 4) {
+                        if !state.isPlaying {
+                            Image(systemName: "pause.fill")
+                                .font(.system(size: 9))
+                        }
+                        Text(state.title)
+                            .font(.system(size: 13, weight: .semibold))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    Text(state.artists)
+                        .font(.caption2)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                 }
-                (Text(state.title).font(.system(size: 13, weight: .semibold)) + Text("  \(state.artists)").font(.caption2))
-                    .foregroundStyle(.white.opacity(0.5))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                .foregroundStyle(.white.opacity(0.5))
                 Spacer(minLength: 0)
             }
             StarRow(state: state, starSize: 44)

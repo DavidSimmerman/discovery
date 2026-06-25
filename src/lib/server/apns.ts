@@ -31,11 +31,26 @@ export type ApnsPushResult =
   | { ok: true; status: number }
   | { ok: false; status?: number; reason: string };
 
+/**
+ * Reconstruct a valid PEM from however the key ended up in the env var.
+ * Coolify (and most env stores) collapse a multi-line `.p8` to one line —
+ * newlines become spaces or vanish — which makes OpenSSL throw
+ * "DECODER routines::unsupported". Re-wrap the base64 body at 64 cols so the
+ * key parses whether it was pasted with real newlines, literal "\n", spaces,
+ * or no separators at all.
+ */
+export function normalizePem(raw: string): string {
+  const s = raw.replace(/\\n/g, '\n').trim();
+  const m = s.match(/-----BEGIN ([A-Za-z0-9 ]+?)-----([\s\S]*?)-----END \1-----/);
+  if (!m) return s; // not a recognizable PEM block — let crypto surface the error
+  const body = (m[2].replace(/\s+/g, '').match(/.{1,64}/g) ?? []).join('\n');
+  return `-----BEGIN ${m[1]}-----\n${body}\n-----END ${m[1]}-----\n`;
+}
+
 export function readApnsConfig(): ApnsConfig | null {
   const teamId = env.APNS_TEAM_ID;
   const keyId = env.APNS_KEY_ID;
-  // Allow the PEM to be stored with literal "\n" (single-line env var).
-  const privateKeyPem = env.APNS_AUTH_KEY?.replace(/\\n/g, '\n');
+  const privateKeyPem = env.APNS_AUTH_KEY ? normalizePem(env.APNS_AUTH_KEY) : undefined;
   if (!teamId || !keyId || !privateKeyPem) return null;
   return {
     teamId,

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { generateKeyPairSync, verify as cryptoVerify } from 'node:crypto';
+import { generateKeyPairSync, verify as cryptoVerify, createPrivateKey } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 
 const h = vi.hoisted(() => {
@@ -48,6 +48,7 @@ import {
   buildLiveActivityPayload,
   apnsHost,
   pushActivityUpdate,
+  normalizePem,
   __resetApnsJwtCache,
 } from '$lib/server/apns';
 
@@ -71,6 +72,22 @@ beforeEach(() => {
     APNS_AUTH_KEY: PEM,
     APNS_BUNDLE_ID: 'tech.simmerman.discovery',
   });
+});
+
+describe('normalizePem', () => {
+  const original = createPrivateKey(PEM).export({ type: 'pkcs8', format: 'der' });
+  const cases: Record<string, string> = {
+    'real newlines (already valid)': PEM,
+    'literal backslash-n': PEM.replace(/\n/g, '\\n'),
+    'newlines collapsed to spaces': PEM.replace(/\n/g, ' '),
+    'newlines stripped entirely': PEM.replace(/\n/g, ''),
+  };
+  for (const [name, mangled] of Object.entries(cases)) {
+    it(`recovers a usable key from: ${name}`, () => {
+      const key = createPrivateKey(normalizePem(mangled));
+      expect(key.export({ type: 'pkcs8', format: 'der' })).toEqual(original);
+    });
+  }
 });
 
 describe('signApnsJwt', () => {

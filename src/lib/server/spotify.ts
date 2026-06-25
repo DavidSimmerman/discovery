@@ -467,7 +467,9 @@ async function fetchFirstSavedPage(
     if (res.ok) {
       if (savedTracksUrlIndex == null) {
         savedTracksUrlIndex = SAVED_TRACKS_URLS.indexOf(base);
-        console.warn('[savedTracks] listing endpoint resolved', { base, rejected: tried });
+        // Info, not a warning: this is the success path (resolved once per
+        // process). The `rejected` list is just which candidates 4xx'd first.
+        console.log('[savedTracks] listing endpoint resolved', { base, rejected: tried });
       }
       const page = (await res.json()) as SavedPage;
       return { page, next: page.next ?? null };
